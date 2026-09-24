@@ -1,0 +1,21 @@
+name: fresque
+description: Real-time collaborative whiteboard for Flutter, with drawing tools, stylus support and offline edits. Client of the Fresque Go server.
+version: 0.1.0
+repository: https://github.com/citadellefr/fresque
+issue_tracker: https://github.com/citadellefr/fresque/issues
+topics: [whiteboard, collaboration, drawing, canvas, websocket]
+
+environment:
+  sdk: ^3.12.0
+  flutter: ">=3.44.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  web_socket_channel: ^3.0.3
+
+dev_dependencies:
+  fake_async: ^1.3.0
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
