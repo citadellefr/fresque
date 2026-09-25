@@ -47,8 +47,9 @@ Performance comes from doing little:
   saves a board only once edits pause;
 - a slow client is disconnected rather than allowed to hold anyone up. It
   catches up from the full board when it reconnects;
-- the client records committed elements once into a picture that is replayed
-  at any zoom level. New elements drawn on top only record themselves;
+- the client records committed elements once, in pictures replayed at any
+  zoom level. Each picture holds a few hundred neighbours in stacking order,
+  so an edit only records its own again;
 - strokes are simplified before they are sent. A stroke in progress travels
   as the points added since the previous frame.
 

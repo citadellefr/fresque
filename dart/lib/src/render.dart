@@ -1,7 +1,7 @@
 import 'dart:math' as math;
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart';
 
 import 'board.dart';
@@ -94,81 +94,144 @@ void _arrowHead(Canvas canvas, BoardElement e, Paint paint) {
   }
 }
 
-/// The committed elements, recorded once and replayed at any zoom. Elements
-/// added on top only record themselves; anything else records the board
-/// again.
+/// The committed elements, recorded once and replayed at any zoom. They are
+/// recorded in chunks of neighbours in stacking order, so that an edit only
+/// records its chunk again.
 class Scene {
-  static const _maxLayers = 64;
+  static const _chunkSize = 256;
 
-  ui.Picture? _base;
-  final _layers = <ui.Picture>[];
-  final _drawn = <String>{};
-  int _topZ = 0;
+  final _chunks = <_Chunk>[];
+  final _chunkOf = <String, _Chunk>{};
   Set<String> _hidden = const {};
+  var _built = false;
+
+  /// What is drawn, bottom to top.
+  @visibleForTesting
+  Iterable<BoardElement> get drawn => _chunks.expand((chunk) => chunk.elements);
 
   /// Catches up with [board], leaving out the [hidden] elements.
   void sync(Board board, Set<String> hidden) {
     final changes = board.takeChanges();
-    if (_base != null && changes != null && _sameSet(hidden, _hidden) && _onTop(board, changes)) {
-      if (changes.isNotEmpty) _addLayer(board, changes);
+    if (changes == null || !_built) {
+      _hidden = hidden;
+      _rebuild(board);
       return;
     }
-    _hidden = hidden;
-    _rebuild(board);
+    if (!_sameSet(hidden, _hidden)) {
+      changes
+        ..addAll(hidden.difference(_hidden))
+        ..addAll(_hidden.difference(hidden));
+      _hidden = hidden;
+    }
+    for (final id in changes) {
+      final chunk = _chunkOf.remove(id);
+      if (chunk != null) {
+        chunk.remove(id);
+        if (chunk.elements.isEmpty) _chunks.remove(chunk);
+      }
+      final e = board[id];
+      if (e != null && !hidden.contains(id)) _insert(e);
+    }
   }
 
   void paint(Canvas canvas) {
-    final base = _base;
-    if (base != null) canvas.drawPicture(base);
-    _layers.forEach(canvas.drawPicture);
+    for (final chunk in _chunks) {
+      canvas.drawPicture(chunk.picture);
+    }
   }
 
   void dispose() {
-    _base?.dispose();
-    for (final layer in _layers) {
-      layer.dispose();
+    for (final chunk in _chunks) {
+      chunk.clear();
     }
-    _layers.clear();
-  }
-
-  bool _onTop(Board board, Set<String> changes) {
-    if (_layers.length >= _maxLayers) return false;
-    for (final id in changes) {
-      final e = board[id];
-      if (e == null || _drawn.contains(id) || _hidden.contains(id) || e.z <= _topZ) return false;
-    }
-    return true;
-  }
-
-  void _addLayer(Board board, Set<String> ids) {
-    final elements = [for (final id in ids) board[id]!]..sort(compareElements);
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder);
-    for (final e in elements) {
-      paintElement(canvas, e);
-      _drawn.add(e.id);
-    }
-    _layers.add(recorder.endRecording());
-    _topZ = elements.last.z;
+    _chunks.clear();
+    _chunkOf.clear();
+    _built = false;
   }
 
   void _rebuild(Board board) {
     dispose();
-    _drawn.clear();
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder);
-    final elements = board.elements;
-    for (final e in elements) {
+    _built = true;
+    for (final e in board.elements) {
       if (_hidden.contains(e.id)) continue;
-      paintElement(canvas, e);
-      _drawn.add(e.id);
+      if (_chunks.isEmpty || _chunks.last.elements.length >= _chunkSize) _chunks.add(_Chunk());
+      _chunks.last.elements.add(e);
+      _chunkOf[e.id] = _chunks.last;
     }
-    _base = recorder.endRecording();
-    _topZ = elements.isEmpty ? 0 : elements.last.z;
+  }
+
+  /// Into the highest chunk that starts below [e]: new elements usually go
+  /// on top, in the last chunk, or in a new one once it is full.
+  void _insert(BoardElement e) {
+    var i = _chunks.length - 1;
+    while (i > 0 && compareElements(_chunks[i].elements.first, e) > 0) {
+      i--;
+    }
+    if (i < 0 ||
+        i == _chunks.length - 1 &&
+            _chunks[i].elements.length >= _chunkSize &&
+            compareElements(_chunks[i].elements.last, e) < 0) {
+      _chunks.add(_Chunk());
+      i++;
+    }
+    final chunk = _chunks[i]..insert(e);
+    _chunkOf[e.id] = chunk;
+    if (chunk.elements.length > 2 * _chunkSize) _split(i);
+  }
+
+  void _split(int i) {
+    final lower = _chunks[i];
+    final upper = _Chunk()..elements.addAll(lower.elements.skip(_chunkSize));
+    lower.elements.length = _chunkSize;
+    _chunks.insert(i + 1, upper);
+    for (final e in upper.elements) {
+      _chunkOf[e.id] = upper;
+    }
   }
 
   static bool _sameSet(Set<String> a, Set<String> b) =>
       identical(a, b) || a.length == b.length && a.containsAll(b);
+}
+
+class _Chunk {
+  final elements = <BoardElement>[];
+  ui.Picture? _picture;
+
+  ui.Picture get picture => _picture ??= _record();
+
+  void insert(BoardElement e) {
+    var low = 0, high = elements.length;
+    while (low < high) {
+      final middle = (low + high) >> 1;
+      if (compareElements(elements[middle], e) < 0) {
+        low = middle + 1;
+      } else {
+        high = middle;
+      }
+    }
+    elements.insert(low, e);
+    clear();
+  }
+
+  void remove(String id) {
+    elements.removeWhere((e) => e.id == id);
+    clear();
+  }
+
+  /// Drops the recording, to be made again on the next paint.
+  void clear() {
+    _picture?.dispose();
+    _picture = null;
+  }
+
+  ui.Picture _record() {
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    for (final e in elements) {
+      paintElement(canvas, e);
+    }
+    return recorder.endRecording();
+  }
 }
 
 /// The whole board as a PNG, [margin] around the drawing, or null when it is

@@ -719,10 +719,14 @@ class _Eraser implements _Gesture {
     final tolerance = view.tolerance;
     final steps = math.max(1, ((to - _last).distance / tolerance).ceil());
     final before = _ids.length;
-    final elements = view.board.elements;
-    for (var i = 1; i <= steps; i++) {
+    final swept = Rect.fromPoints(_last, to).inflate(tolerance);
+    final near = [
+      for (final e in view.board.elements)
+        if (e.bounds.overlaps(swept) && !_ids.contains(e.id)) e,
+    ];
+    for (var i = 1; i <= steps && near.isNotEmpty; i++) {
       final p = Offset.lerp(_last, to, i / steps)!;
-      for (final e in elements) {
+      for (final e in near) {
         if (!_ids.contains(e.id) && hits(e, p, tolerance)) _ids.add(e.id);
       }
     }
@@ -850,12 +854,18 @@ class _ScenePainter extends CustomPainter {
     while (step < 16) {
       step *= 2;
     }
-    final offset = controller.offset;
-    final points = <Offset>[
-      for (var x = offset.dx % step; x < size.width; x += step)
-        for (var y = offset.dy % step; y < size.height; y += step) Offset(x, y),
-    ];
-    canvas.drawPoints(
+    final left = controller.offset.dx % step, top = controller.offset.dy % step;
+    final columns = math.max(0, ((size.width - left) / step).ceil());
+    final rows = math.max(0, ((size.height - top) / step).ceil());
+    final points = Float32List(2 * columns * rows);
+    var i = 0;
+    for (var c = 0; c < columns; c++) {
+      for (var r = 0; r < rows; r++) {
+        points[i++] = left + c * step;
+        points[i++] = top + r * step;
+      }
+    }
+    canvas.drawRawPoints(
       PointMode.points,
       points,
       Paint()

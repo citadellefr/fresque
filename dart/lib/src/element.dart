@@ -148,13 +148,21 @@ class BoardElement {
       y: _double(json['y']),
       width: _double(json['w']),
       height: _double(json['h']),
-      points: p is List<Object?> ? Float32List.fromList([for (final v in p) _double(v)]) : null,
+      points: p is List<Object?> ? _points(p) : null,
       color: _int(json['c'], 0xFF000000),
       strokeWidth: _double(json['sw'], 2),
       filled: json['f'] == 1 || json['f'] == true,
       text: json['tx'] is String ? json['tx']! as String : '',
       fontSize: _double(json['fs'], 20),
     );
+  }
+
+  static Float32List _points(List<Object?> json) {
+    final points = Float32List(json.length);
+    for (var i = 0; i < json.length; i++) {
+      points[i] = _double(json[i]);
+    }
+    return points;
   }
 
   /// Tenths of a unit are finer than anyone draws; whole numbers are written

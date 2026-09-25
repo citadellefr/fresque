@@ -1,5 +1,6 @@
 import 'dart:collection';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
@@ -35,6 +36,8 @@ class Board extends ChangeNotifier {
   final _changed = <String>{};
   var _everything = true;
   var _next = 1;
+  var _topZ = 0;
+  var _bottomZ = 0;
   List<BoardElement>? _sorted;
 
   BoardElement? operator [](String id) => _local.containsKey(id) ? _local[id] : _confirmed[id];
@@ -42,9 +45,12 @@ class Board extends ChangeNotifier {
   /// Every element, bottom to top.
   List<BoardElement> get elements => _sorted ??= _sort();
 
-  int get topZ => elements.isEmpty ? 0 : elements.last.z;
+  /// At least the highest z of the board, without sorting it: an element
+  /// given `topZ + 1` goes above all the others.
+  int get topZ => _topZ;
 
-  int get bottomZ => elements.isEmpty ? 0 : elements.first.z;
+  /// At most the lowest z of the board.
+  int get bottomZ => _bottomZ;
 
   Iterable<Operation> get pending => _pending;
 
@@ -67,6 +73,7 @@ class Board extends ChangeNotifier {
     final op = Operation(_next++, put, delete);
     for (final e in put) {
       _overlay(e.id, e);
+      _span(e);
     }
     for (final id in delete) {
       _overlay(id, null);
@@ -97,6 +104,7 @@ class Board extends ChangeNotifier {
   void applyRemote(List<BoardElement> put, List<String> delete) {
     for (final e in put) {
       _confirmed[e.id] = e;
+      _span(e);
       if (!_local.containsKey(e.id)) _touch(e.id);
     }
     for (final id in delete) {
@@ -118,10 +126,13 @@ class Board extends ChangeNotifier {
     }
     _local.clear();
     _counts.clear();
+    _topZ = _bottomZ = 0;
+    _confirmed.values.forEach(_span);
     for (final op in _pending) {
       for (final e in op.put) {
         _local[e.id] = e;
         _counts.update(e.id, (c) => c + 1, ifAbsent: () => 1);
+        _span(e);
       }
       for (final id in op.delete) {
         _local[id] = null;
@@ -138,6 +149,11 @@ class Board extends ChangeNotifier {
     _local[id] = e;
     _counts.update(id, (c) => c + 1, ifAbsent: () => 1);
     _touch(id);
+  }
+
+  void _span(BoardElement e) {
+    _topZ = math.max(_topZ, e.z);
+    _bottomZ = math.min(_bottomZ, e.z);
   }
 
   void _release(Operation op, {required bool visible}) {
