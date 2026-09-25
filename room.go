@@ -128,6 +128,10 @@ func (r *room) broadcast(frame []byte, except *peer) {
 }
 
 func (r *room) handle(p *peer, msg []byte) {
+	if d, ok := presenceData(msg); ok {
+		r.relayPresence(p, d)
+		return
+	}
 	var in inbound
 	if err := json.Unmarshal(msg, &in); err != nil {
 		if in.T == "op" {
@@ -139,12 +143,17 @@ func (r *room) handle(p *peer, msg []byte) {
 	case "op":
 		r.apply(p, &in)
 	case "eph":
-		if len(in.D) > 0 && len(in.D) <= maxPresenceBytes && p.allowPresence(time.Now()) {
-			r.mu.Lock()
-			r.broadcast(presenceFrame(p.sid, in.D), p)
-			r.mu.Unlock()
-		}
+		r.relayPresence(p, in.D)
 	}
+}
+
+func (r *room) relayPresence(p *peer, d []byte) {
+	if len(d) == 0 || len(d) > maxPresenceBytes || !p.allowPresence(time.Now()) {
+		return
+	}
+	r.mu.Lock()
+	r.broadcast(presenceFrame(p.sid, d), p)
+	r.mu.Unlock()
 }
 
 func (r *room) apply(p *peer, in *inbound) {

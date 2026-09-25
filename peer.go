@@ -10,7 +10,17 @@ const (
 	writeWait    = 10 * time.Second
 	pingInterval = 25 * time.Second
 	pongWait     = 60 * time.Second
+
+	// compressFrom is the smallest frame worth compressing, when the
+	// connection negotiated it: the board sent on connection, long strokes.
+	compressFrom = 4 << 10
 )
+
+// compressor is implemented by the Conn of gorilla/websocket and
+// fasthttp/websocket.
+type compressor interface {
+	EnableWriteCompression(enable bool)
+}
 
 type peer struct {
 	conn Conn
@@ -69,9 +79,13 @@ func (p *peer) writeLoop() {
 	defer p.conn.Close()
 	ping := time.NewTicker(pingInterval)
 	defer ping.Stop()
+	compress, _ := p.conn.(compressor)
 	for {
 		select {
 		case frame := <-p.out:
+			if compress != nil {
+				compress.EnableWriteCompression(len(frame) >= compressFrom)
+			}
 			_ = p.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if p.conn.WriteMessage(textMessage, frame) != nil {
 				p.close(0, "")

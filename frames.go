@@ -41,17 +41,81 @@ type element struct {
 }
 
 func (e *element) UnmarshalJSON(b []byte) error {
-	var head struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(b, &head); err != nil {
-		return err
-	}
-	if !validID(head.ID) {
+	id, ok := readID(b)
+	if !ok {
 		return errBadID
 	}
-	e.id, e.raw = head.ID, bytes.Clone(b)
+	e.id, e.raw = id, bytes.Clone(b)
 	return nil
+}
+
+// readID reads the "id" member of an element without decoding the rest.
+// json.Unmarshal, which calls element.UnmarshalJSON, has already validated
+// the bytes. Keys are compared as written, as the clients do, and an element
+// with two ids is refused, so that everyone agrees on which element it is.
+func readID(b []byte) (string, bool) {
+	i := skipSpace(b, 0)
+	if i == len(b) || b[i] != '{' {
+		return "", false
+	}
+	id := ""
+	for i = skipSpace(b, i+1); i < len(b) && b[i] != '}'; i = skipSpace(b, i) {
+		if b[i] == ',' {
+			i = skipSpace(b, i+1)
+		}
+		keyEnd := valueEnd(b, i)
+		value := skipSpace(b, skipSpace(b, keyEnd)+1)
+		end := valueEnd(b, value)
+		if string(b[i:keyEnd]) == `"id"` {
+			if id != "" || value == len(b) || b[value] != '"' {
+				return "", false
+			}
+			id = string(b[value+1 : end-1])
+		}
+		i = end
+	}
+	return id, validID(id)
+}
+
+func skipSpace(b []byte, i int) int {
+	for i < len(b) && (b[i] == ' ' || b[i] == '\t' || b[i] == '\n' || b[i] == '\r') {
+		i++
+	}
+	return i
+}
+
+// valueEnd is the index just past the valid JSON value starting at i.
+func valueEnd(b []byte, i int) int {
+	depth := 0
+	for ; i < len(b); i++ {
+		switch b[i] {
+		case '"':
+			for i++; i < len(b) && b[i] != '"'; i++ {
+				if b[i] == '\\' {
+					i++
+				}
+			}
+		case '{', '[':
+			depth++
+			continue
+		case '}', ']':
+			if depth == 0 {
+				return i
+			}
+			depth--
+		case ',', ':', ' ', '\t', '\n', '\r':
+			if depth == 0 {
+				return i
+			}
+			continue
+		default:
+			continue
+		}
+		if depth == 0 {
+			return min(i+1, len(b))
+		}
+	}
+	return i
 }
 
 type elementID string
@@ -117,6 +181,20 @@ func opFrame(sid uint32, put []element, del []elementID) []byte {
 		b = append(b, ']')
 	}
 	return append(b, '}')
+}
+
+var presencePrefix = []byte(`{"t":"eph","d":`)
+
+// presenceData reads a presence frame written the way the Flutter client
+// writes it with a single scan instead of a full decode: presence is most of
+// the traffic. Any other frame is left to json.Unmarshal.
+func presenceData(msg []byte) ([]byte, bool) {
+	d, ok := bytes.CutPrefix(msg, presencePrefix)
+	if !ok {
+		return nil, false
+	}
+	d, ok = bytes.CutSuffix(d, []byte{'}'})
+	return d, ok && json.Valid(d)
 }
 
 func presenceFrame(sid uint32, d []byte) []byte {

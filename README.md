@@ -42,8 +42,9 @@ server confirmed, and rolls them back if the server refuses them.
 
 Performance comes from doing little:
 
-- the server reads nothing but element ids. It assembles frames by appending
-  bytes and saves a board only once edits pause;
+- the server reads nothing but element ids, without decoding the rest. It
+  relays cursors after a single scan, assembles frames by appending bytes and
+  saves a board only once edits pause;
 - a slow client is disconnected rather than allowed to hold anyone up. It
   catches up from the full board when it reconnects;
 - the client records committed elements once into a picture that is replayed
@@ -75,7 +76,9 @@ err := hub.Serve(ctx, conn, boardID, fresque.Peer{
 `conn` is a `*websocket.Conn` from
 [gorilla/websocket](https://github.com/gorilla/websocket) or
 [fasthttp/websocket](https://github.com/fasthttp/websocket). Any type with the
-same methods works.
+same methods works. With `EnableCompression` set on your upgrader, the hub
+compresses the frames large enough to gain from it, such as the board sent on
+connection, and nothing else.
 
 `store` loads and saves board files:
 
@@ -159,8 +162,8 @@ JSON text frames over one WebSocket per board.
 Close codes: `4000` board could not be loaded, `4001` access withdrawn, `4002`
 connection too slow, `4003` server shutting down. Each one carries a reason.
 
-Element ids are 1 to 64 characters from `[A-Za-z0-9_-]`. Beyond its id, an
-element is opaque to the server.
+Element ids are 1 to 64 characters from `[A-Za-z0-9_-]`, written without
+escapes, once per element. Beyond its id, an element is opaque to the server.
 
 ## File format
 

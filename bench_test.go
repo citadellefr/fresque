@@ -48,3 +48,20 @@ func BenchmarkRelay(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkLoad measures opening a board of 10 000 strokes.
+func BenchmarkLoad(b *testing.B) {
+	elements := make([]element, 10_000)
+	for i := range elements {
+		id := "stroke" + strconv.Itoa(i)
+		elements[i] = element{id: id, raw: []byte(`{"id":"` + id + `","k":"s","z":4,"x":120.5,"y":80,"p":[0,0,1.5,2,3,4.5,6,7,9,10.5,12,14,15.5,18,19,21],"c":4280163870,"sw":3}`)}
+	}
+	data := encodeBoard(elements)
+	b.SetBytes(int64(len(data)))
+	b.ReportAllocs()
+	for range b.N {
+		if _, _, err := decodeBoard(data); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

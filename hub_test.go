@@ -342,6 +342,113 @@ func TestPresenceIsRelayedAndRateLimited(t *testing.T) {
 	a.quiet()
 }
 
+func FuzzReadID(f *testing.F) {
+	for _, seed := range []string{
+		`{"id":"a1"}`,
+		` { "k" : "s" , "p" : [1, 2.5e3, -0] , "id" : "b_2-" } `,
+		`{"n":{"id":"x"},"tx":"\\\"id\":","id":"c"}`,
+		`{"id":"a","id":"b"}`,
+		`{"ID":"a"}`,
+		`{"id":"\u0061"}`,
+		`{"id":1}`,
+		`[{"id":"a"}]`,
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		if !json.Valid([]byte(s)) {
+			return
+		}
+		id, ok := readID([]byte(s))
+		var members map[string]json.RawMessage
+		var want string
+		wantOK := json.Unmarshal([]byte(s), &members) == nil &&
+			json.Unmarshal(members["id"], &want) == nil && validID(want) &&
+			string(members["id"]) == `"`+want+`"`
+		twice := strings.Count(s, `"id"`) > 1
+		if ok != wantOK && !(twice && !ok) || ok && id != want {
+			t.Fatalf("readID(%s) = %q, %v; want %q, %v", s, id, ok, want, wantOK)
+		}
+	})
+}
+
+func TestPresenceData(t *testing.T) {
+	for _, c := range []struct {
+		msg, d string
+		ok     bool
+	}{
+		{`{"t":"eph","d":{"c":[1,2]}}`, `{"c":[1,2]}`, true},
+		{`{"t":"eph","d":null}`, `null`, true},
+		{`{"t":"eph","d":{"c":[1,2]},"x":1}`, "", false},
+		{`{"t":"eph","d":{"c":[1,2}}`, "", false},
+		{`{"d":{"c":[1,2]},"t":"eph"}`, "", false},
+		{`{"t":"op","n":1}`, "", false},
+	} {
+		d, ok := presenceData([]byte(c.msg))
+		if ok != c.ok || ok && string(d) != c.d {
+			t.Errorf("presenceData(%s) = %s, %v", c.msg, d, ok)
+		}
+	}
+}
+
+func TestPresenceInAnyKeyOrderIsRelayed(t *testing.T) {
+	h := NewHub(newMemStore(), Options{})
+	ctx := context.Background()
+	a := connect(t, h, ctx, "b", Peer{ID: "1"})
+	a.expect("hello")
+	b := connect(t, h, ctx, "b", Peer{ID: "2"})
+	b.expect("hello")
+	a.expect("join")
+
+	a.send(`{"d":{"c":[3,4]},"t":"eph"}`)
+	if f := b.expect("eph"); string(f.D) != `{"c":[3,4]}` {
+		t.Fatalf("eph = %+v", f)
+	}
+}
+
+type compressingConn struct {
+	*fakeConn
+	sizes chan int
+	next  bool
+}
+
+func (c *compressingConn) EnableWriteCompression(enable bool) { c.next = enable }
+
+func (c *compressingConn) WriteMessage(kind int, data []byte) error {
+	if c.next {
+		c.sizes <- len(data)
+	}
+	return c.fakeConn.WriteMessage(kind, data)
+}
+
+func TestOnlyLargeFramesAreCompressed(t *testing.T) {
+	h := NewHub(newMemStore(), Options{})
+	ctx := context.Background()
+	a := connect(t, h, ctx, "b", Peer{ID: "1"})
+	a.expect("hello")
+	conn := &compressingConn{fakeConn: newFakeConn(), sizes: make(chan int, 8)}
+	go func() { _ = h.Serve(ctx, conn, "b", Peer{ID: "2"}) }()
+	t.Cleanup(func() { conn.Close() })
+	<-conn.out
+	a.expect("join")
+
+	a.send(`{"t":"op","n":1,"put":[{"id":"small"}]}`)
+	a.send(`{"t":"op","n":2,"put":[{"id":"large","tx":"` + strings.Repeat("x", compressFrom) + `"}]}`)
+	<-conn.out
+	<-conn.out
+	select {
+	case size := <-conn.sizes:
+		if size < compressFrom {
+			t.Fatalf("compressed a %d-byte frame", size)
+		}
+	default:
+		t.Fatal("large frame not compressed")
+	}
+	if len(conn.sizes) != 0 {
+		t.Fatal("small frame compressed")
+	}
+}
+
 func TestSaveFailureIsReportedAndRetried(t *testing.T) {
 	store := newMemStore()
 	h := NewHub(store, fastOptions())
