@@ -79,6 +79,40 @@ void main() {
     expect(controller.selection, {before.id});
   });
 
+  boardTest('the text tool writes a text', (tester) async {
+    await mount(tester);
+    controller.tool = BoardTool.text;
+    await tester.tapAt(const Offset(200, 200));
+    await tester.pump();
+    expect(tester.testTextInput.hasAnyClients, isTrue);
+
+    tester.testTextInput.enterText('Hello');
+    await tester.pump();
+    await tester.tapAt(tester.getCenter(find.byType(EditableText)));
+    await tester.pump();
+    expect(find.byType(EditableText), findsOneWidget);
+
+    await tester.tapAt(const Offset(500, 400));
+    await tester.pump();
+    expect(find.byType(EditableText), findsNothing);
+    final text = session.board.elements.single;
+    expect(text.kind, ElementKind.text);
+    expect(text.text, 'Hello');
+    expect(text.width, greaterThan(0));
+  });
+
+  boardTest('the text being edited follows the view', (tester) async {
+    await mount(tester);
+    controller.tool = BoardTool.text;
+    await tester.tapAt(const Offset(200, 200));
+    await tester.pump();
+    final before = tester.getTopLeft(find.byType(EditableText));
+
+    controller.panBy(const Offset(30, 10));
+    await tester.pump();
+    expect(tester.getTopLeft(find.byType(EditableText)) - before, const Offset(30, 10));
+  });
+
   boardTest('a read-only board only pans', (tester) async {
     await mount(tester, greeting: hello(readOnly: true));
     final offset = controller.offset;

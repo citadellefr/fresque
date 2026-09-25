@@ -164,52 +164,61 @@ class _BoardViewState extends State<BoardView> {
           focusNode: _focus,
           autofocus: true,
           onKeyEvent: _key,
-          child: ListenableBuilder(
-            listenable: controller,
-            builder: (context, child) => MouseRegion(
-              cursor: _cursor(),
-              onExit: (_) => session.moveCursor(null),
-              child: child,
-            ),
-            child: Listener(
-              onPointerDown: _down,
-              onPointerMove: _move,
-              onPointerHover: (e) => session.moveCursor(controller.toWorld(e.localPosition)),
-              onPointerUp: _up,
-              onPointerCancel: (e) => _up(e, cancelled: true),
-              onPointerSignal: _signal,
-              onPointerPanZoomStart: (_) => _panZoomScale = 1,
-              onPointerPanZoomUpdate: _panZoom,
-              child: ClipRect(
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    RepaintBoundary(
-                      child: CustomPaint(
-                        painter: _ScenePainter(
-                          scene: _scene,
-                          board: board,
-                          controller: controller,
-                          hidden: _interaction.hidden,
-                          grid: widget.gridColor ?? theme.colorScheme.outlineVariant,
+          child: ClipRect(
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                ListenableBuilder(
+                  listenable: controller,
+                  builder: (context, child) => MouseRegion(
+                    cursor: _cursor(),
+                    onExit: (_) => session.moveCursor(null),
+                    child: child,
+                  ),
+                  child: Listener(
+                    onPointerDown: _down,
+                    onPointerMove: _move,
+                    onPointerHover: (e) => session.moveCursor(controller.toWorld(e.localPosition)),
+                    onPointerUp: _up,
+                    onPointerCancel: (e) => _up(e, cancelled: true),
+                    onPointerSignal: _signal,
+                    onPointerPanZoomStart: (_) => _panZoomScale = 1,
+                    onPointerPanZoomUpdate: _panZoom,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        RepaintBoundary(
+                          child: CustomPaint(
+                            painter: _ScenePainter(
+                              scene: _scene,
+                              board: board,
+                              controller: controller,
+                              hidden: _interaction.hidden,
+                              grid: widget.gridColor ?? theme.colorScheme.outlineVariant,
+                            ),
+                          ),
                         ),
-                      ),
-                    ),
-                    RepaintBoundary(
-                      child: CustomPaint(
-                        painter: _OverlayPainter(
-                          session: session,
-                          controller: controller,
-                          interaction: _interaction,
-                          accent: accent,
-                          labels: _labels,
+                        RepaintBoundary(
+                          child: CustomPaint(
+                            painter: _OverlayPainter(
+                              session: session,
+                              controller: controller,
+                              interaction: _interaction,
+                              accent: accent,
+                              labels: _labels,
+                            ),
+                          ),
                         ),
-                      ),
+                      ],
                     ),
-                    if (_editing case final editing?) _textField(editing),
-                  ],
+                  ),
                 ),
-              ),
+                if (_editing case final editing?)
+                  ListenableBuilder(
+                    listenable: controller,
+                    builder: (context, _) => _textField(editing),
+                  ),
+              ],
             ),
           ),
         );
@@ -239,15 +248,16 @@ class _BoardViewState extends State<BoardView> {
           maxWidth: math.max(24, _size.width - position.dx),
         ),
         child: IntrinsicWidth(
-          child: TextField(
-            controller: editing.text,
-            focusNode: editing.focus,
-            autofocus: true,
-            maxLines: null,
-            style: textStyle(e.color, e.fontSize * controller.scale),
-            cursorColor: Color(e.color),
-            decoration: const InputDecoration.collapsed(hintText: ''),
-            onTapOutside: (_) => _commitText(),
+          child: MediaQuery.withNoTextScaling(
+            child: TextField(
+              controller: editing.text,
+              focusNode: editing.focus,
+              maxLines: null,
+              style: textStyle(e.color, e.fontSize * controller.scale),
+              cursorColor: Color(e.color),
+              decoration: const InputDecoration.collapsed(hintText: ''),
+              onTapOutside: (_) => _commitText(),
+            ),
           ),
         ),
       ),
@@ -256,7 +266,10 @@ class _BoardViewState extends State<BoardView> {
 
   void _openText(BoardElement element, {required bool isNew}) {
     _commitText();
-    setState(() => _editing = _TextEditing(element, isNew: isNew));
+    final editing = _TextEditing(element, isNew: isNew);
+    setState(() => _editing = editing);
+    // autofocus would not take the focus from the board
+    editing.focus.requestFocus();
     _interaction
       ..editing = element.id
       ..changed();

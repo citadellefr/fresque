@@ -61,8 +61,15 @@ TextPainter textPainter(BoardElement e) => TextPainter(
   textDirection: TextDirection.ltr,
 )..layout();
 
-TextStyle textStyle(int color, double fontSize) =>
-    TextStyle(color: Color(color), fontSize: fontSize, height: 1.25);
+/// Not inherited from the theme, so that a text looks the same being edited
+/// and drawn.
+TextStyle textStyle(int color, double fontSize) => TextStyle(
+  inherit: false,
+  color: Color(color),
+  fontSize: fontSize,
+  height: 1.25,
+  textBaseline: TextBaseline.alphabetic,
+);
 
 /// A smooth curve through the points: quadratic segments between their
 /// midpoints.
