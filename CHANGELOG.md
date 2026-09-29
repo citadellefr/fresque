@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0
+
+- `exportPdf` renders a board to a PDF: the drawing is cut at its real size
+  into A4 pages, turned like the drawing, each page rendered at full
+  resolution and stored without loss. A large board takes more pages instead
+  of being scaled down as `exportPng` does past 8192 pixels. Pages the cut
+  leaves blank are skipped.
+
 ## 0.2.0
 
 - Images: `BoardController.insertImage` puts an image file on the board. The

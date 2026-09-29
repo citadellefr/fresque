@@ -7,6 +7,7 @@ import 'package:flutter/painting.dart';
 import 'board.dart';
 import 'element.dart';
 import 'images.dart';
+import 'pdf.dart';
 
 final _paths = Expando<Path>();
 final _texts = Expando<TextPainter>();
@@ -278,28 +279,12 @@ Future<Uint8List?> exportPng(
 }) async {
   final elements = board.elements;
   if (elements.isEmpty) return null;
-  final bounds = elements
-      .map((e) => e.bounds)
-      .reduce((a, b) => a.expandToInclude(b))
-      .inflate(margin);
+  final bounds = _bounds(elements, margin);
   final scale = math.min(pixelRatio, maxSide / math.max(bounds.width, bounds.height));
   final images = DecodedImages();
   try {
     await images.decodeAll(elements);
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder)
-      ..scale(scale)
-      ..translate(-bounds.left, -bounds.top)
-      ..drawRect(bounds, Paint()..color = background);
-    for (final e in elements) {
-      paintElement(canvas, e, images: images);
-    }
-    final picture = recorder.endRecording();
-    final image = await picture.toImage(
-      math.max(1, (bounds.width * scale).ceil()),
-      math.max(1, (bounds.height * scale).ceil()),
-    );
-    picture.dispose();
+    final image = await _render(elements, images, bounds, scale, background);
     try {
       final data = await image.toByteData(format: ui.ImageByteFormat.png);
       return data?.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
@@ -309,4 +294,95 @@ Future<Uint8List?> exportPng(
   } finally {
     images.dispose();
   }
+}
+
+/// A4 in board units, at 96 per inch.
+const _a4 = Size(794, 1123);
+
+/// The whole board as a PDF, or null when it is empty. The drawing and
+/// [margin] around it are cut at their real size into A4 pages, turned like
+/// the drawing, each rendered at [pixelRatio]: a large board takes more pages
+/// rather than less detail. Pages the cut leaves blank are skipped. The
+/// [background] is opaque.
+Future<Uint8List?> exportPdf(
+  Board board, {
+  double pixelRatio = 2,
+  Color background = const Color(0xFFFFFFFF),
+  double margin = 32,
+}) async {
+  final elements = board.elements;
+  if (elements.isEmpty) return null;
+  final bounds = _bounds(elements, margin);
+  final page = bounds.width > bounds.height ? _a4.flipped : _a4;
+  final columns = (bounds.width / page.width).ceil();
+  final rows = (bounds.height / page.height).ceil();
+  final origin = bounds.center - Offset(columns * page.width, rows * page.height) / 2;
+  final pdf = PdfPictures();
+  final images = DecodedImages();
+  try {
+    await images.decodeAll(elements);
+    for (var row = 0; row < rows; row++) {
+      for (var column = 0; column < columns; column++) {
+        final rect = origin.translate(column * page.width, row * page.height) & page;
+        final drawn = elements.where((e) => e.bounds.overlaps(rect)).toList();
+        if (drawn.isEmpty) continue;
+        final image = await _render(drawn, images, rect, pixelRatio, background);
+        try {
+          final rgb = await _rgb(image, background);
+          if (rgb == null) continue;
+          pdf.addPage(page.width * 0.75, page.height * 0.75, image.width, image.height, rgb);
+        } finally {
+          image.dispose();
+        }
+      }
+    }
+  } finally {
+    images.dispose();
+  }
+  return pdf.close();
+}
+
+Rect _bounds(List<BoardElement> elements, double margin) =>
+    elements.map((e) => e.bounds).reduce((a, b) => a.expandToInclude(b)).inflate(margin);
+
+Future<ui.Image> _render(
+  Iterable<BoardElement> elements,
+  DecodedImages images,
+  Rect rect,
+  double scale,
+  Color background,
+) {
+  final recorder = ui.PictureRecorder();
+  final canvas = Canvas(recorder)
+    ..scale(scale)
+    ..translate(-rect.left, -rect.top)
+    ..drawRect(rect, Paint()..color = background);
+  for (final e in elements) {
+    paintElement(canvas, e, images: images);
+  }
+  final picture = recorder.endRecording();
+  final image = picture.toImage(
+    math.max(1, (rect.width * scale).ceil()),
+    math.max(1, (rect.height * scale).ceil()),
+  );
+  picture.dispose();
+  return image;
+}
+
+/// The pixels of [image] without their alpha, or null when all of them are
+/// [background].
+Future<Uint8List?> _rgb(ui.Image image, Color background) async {
+  final data = (await image.toByteData())!;
+  final rgba = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+  final rgb = Uint8List(rgba.length ~/ 4 * 3);
+  final r = (background.r * 255).round(), g = (background.g * 255).round();
+  final b = (background.b * 255).round();
+  var blank = true;
+  for (var i = 0, j = 0; i < rgba.length; i += 4, j += 3) {
+    rgb[j] = rgba[i];
+    rgb[j + 1] = rgba[i + 1];
+    rgb[j + 2] = rgba[i + 2];
+    blank = blank && rgba[i] == r && rgba[i + 1] == g && rgba[i + 2] == b;
+  }
+  return blank ? null : rgb;
 }
