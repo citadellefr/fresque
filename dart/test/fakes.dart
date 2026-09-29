@@ -1,5 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:fresque/fresque.dart';
 
@@ -80,3 +83,18 @@ BoardElement rect(String id, {int z = 1, double x = 0, double y = 0}) => BoardEl
   height: 10,
   color: 0xFF000000,
 );
+
+/// A PNG of [width] × [height] pixels of noise, which compresses badly.
+Future<Uint8List> noisePng(int width, int height, {bool transparent = false}) async {
+  final random = math.Random(1);
+  final pixels = Uint8List(width * height * 4);
+  for (var i = 0; i < pixels.length; i++) {
+    pixels[i] = i % 4 == 3 && !transparent ? 0xFF : random.nextInt(256);
+  }
+  final decoded = Completer<ui.Image>();
+  ui.decodeImageFromPixels(pixels, width, height, ui.PixelFormat.rgba8888, decoded.complete);
+  final image = await decoded.future;
+  final png = (await image.toByteData(format: ui.ImageByteFormat.png))!;
+  image.dispose();
+  return png.buffer.asUint8List();
+}

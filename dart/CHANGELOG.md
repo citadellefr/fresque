@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.0
+
+- Images: `BoardController.insertImage` puts an image file on the board. The
+  picture travels inside the board as a data URL, kept as it is when small
+  enough, otherwise scaled down and encoded again (JPEG, or PNG when it has
+  transparency) to stay under the server's default element limit. Images are
+  moved, stacked, erased and exported like any element; older clients leave
+  them alone.
+- Zoom: Ctrl and the wheel zoom on the web too, where the browser reports them
+  as a pinch. Ctrl with `+`, `-` or `0` zooms in, out and back to 100 %, and
+  `BoardController.zoomBy` zooms around the middle of the view.
+
 ## 0.1.1
 
 - Text tool: typing works. The field takes the focus, a tap inside it moves

@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import 'board.dart';
 import 'element.dart';
+import 'images.dart';
 import 'session.dart';
 
 enum BoardTool { select, hand, pen, highlighter, line, arrow, rectangle, ellipse, text, eraser }
@@ -44,13 +45,17 @@ class BoardController extends ChangeNotifier {
 
   set color(int color) {
     _color = color;
-    _restyle((e) => e.copyWith(color: color));
+    _restyle((e) => e.kind == ElementKind.image ? e : e.copyWith(color: color));
     notifyListeners();
   }
 
   set strokeWidth(double width) {
     _strokeWidth = width;
-    _restyle((e) => e.kind == ElementKind.text ? e : e.copyWith(strokeWidth: width));
+    _restyle(
+      (e) => e.kind == ElementKind.text || e.kind == ElementKind.image
+          ? e
+          : e.copyWith(strokeWidth: width),
+    );
     notifyListeners();
   }
 
@@ -75,6 +80,33 @@ class BoardController extends ChangeNotifier {
   void selectAll() {
     _tool = BoardTool.select;
     select(session.board.elements.map((e) => e.id));
+  }
+
+  /// Puts the image file [bytes] on the board, in the middle of [viewport],
+  /// and selects it. Throws a [FormatException] when they are not an image.
+  Future<void> insertImage(Uint8List bytes, Size viewport) async {
+    final image = await prepareImage(bytes);
+    final visible = visibleRect(viewport);
+    final fit = math.min(
+      1.0,
+      0.6 * math.min(visible.width / image.size.width, visible.height / image.size.height),
+    );
+    final size = image.size * fit;
+    final e = BoardElement(
+      id: randomId(),
+      kind: ElementKind.image,
+      z: session.board.topZ + 1,
+      x: visible.center.dx - size.width / 2,
+      y: visible.center.dy - size.height / 2,
+      width: size.width,
+      height: size.height,
+      color: 0xFF000000,
+      src: image.src,
+    );
+    session.apply(put: [e]);
+    if (session.board[e.id] == null) return;
+    _tool = BoardTool.select;
+    select([e.id]);
   }
 
   void deleteSelection() {
@@ -114,6 +146,9 @@ class BoardController extends ChangeNotifier {
     _offset += delta;
     notifyListeners();
   }
+
+  /// Zooms by [factor] around the middle of [viewport].
+  void zoomBy(double factor, Size viewport) => zoomAt(viewport.center(Offset.zero), factor);
 
   /// Zooms by [factor], keeping the board point under [focal] where it is.
   void zoomAt(Offset focal, double factor) {

@@ -9,7 +9,8 @@ enum ElementKind {
   arrow('a'),
   rectangle('r'),
   ellipse('e'),
-  text('t');
+  text('t'),
+  image('i');
 
   const ElementKind(this.code);
 
@@ -27,8 +28,9 @@ enum ElementKind {
 /// same [id].
 ///
 /// Strokes, lines and arrows hold their [points] as `x0, y0, x1, y1, …`
-/// relative to ([x], [y]), so moving one only changes its origin. Shapes and
-/// texts span [width] × [height] from their origin.
+/// relative to ([x], [y]), so moving one only changes its origin. Shapes,
+/// texts and images span [width] × [height] from their origin. An image
+/// carries its picture in [src], a data URL.
 @immutable
 class BoardElement {
   BoardElement({
@@ -45,6 +47,7 @@ class BoardElement {
     this.filled = false,
     this.text = '',
     this.fontSize = 20,
+    this.src = '',
   }) : points = points ?? _noPoints;
 
   static final _noPoints = Float32List(0);
@@ -62,6 +65,7 @@ class BoardElement {
   final bool filled;
   final String text;
   final double fontSize;
+  final String src;
 
   late final Rect bounds = _bounds();
 
@@ -94,6 +98,7 @@ class BoardElement {
     filled: filled ?? this.filled,
     text: text ?? this.text,
     fontSize: fontSize ?? this.fontSize,
+    src: src,
   );
 
   BoardElement translated(Offset delta) => copyWith(x: x + delta.dx, y: y + delta.dy);
@@ -113,7 +118,9 @@ class BoardElement {
       return Rect.fromLTRB(x + left, y + top, x + right, y + bottom).inflate(pad);
     }
     final rect = Rect.fromLTWH(x, y, width, height);
-    return kind == ElementKind.text ? rect : rect.inflate(strokeWidth / 2);
+    return kind == ElementKind.text || kind == ElementKind.image
+        ? rect
+        : rect.inflate(strokeWidth / 2);
   }
 
   double get arrowHeadLength => math.max(12, strokeWidth * 4);
@@ -131,6 +138,7 @@ class BoardElement {
     'sw': _num(strokeWidth),
     if (filled) 'f': 1,
     if (kind == ElementKind.text) ...{'tx': text, 'fs': _num(fontSize)},
+    if (kind == ElementKind.image) 'src': src,
   };
 
   /// Null for anything this version cannot draw, which is then left alone.
@@ -154,6 +162,7 @@ class BoardElement {
       filled: json['f'] == 1 || json['f'] == true,
       text: json['tx'] is String ? json['tx']! as String : '',
       fontSize: _double(json['fs'], 20),
+      src: json['src'] is String ? json['src']! as String : '',
     );
   }
 

@@ -1,4 +1,6 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fresque/fresque.dart';
 
@@ -146,5 +148,48 @@ void main() {
     final size = tester.getSize(find.byType(BoardView));
     expect(center.dx, closeTo(size.width / 2, 1));
     expect(center.dy, closeTo(size.height / 2, 1));
+  });
+
+  boardTest('Ctrl and the wheel zoom around the pointer on the web', (tester) async {
+    await mount(tester);
+    const pointer = Offset(200, 150);
+    final under = controller.toWorld(pointer);
+    tester.binding.handlePointerEvent(const PointerScaleEvent(position: pointer, scale: 2));
+    await tester.pump();
+    expect(controller.scale, 2);
+    expect(controller.toWorld(pointer), under);
+  });
+
+  boardTest('Ctrl with + - and 0 zooms', (tester) async {
+    await mount(tester);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.equal);
+    expect(controller.scale, 1.25);
+    await tester.sendKeyEvent(LogicalKeyboardKey.minus);
+    await tester.sendKeyEvent(LogicalKeyboardKey.minus);
+    expect(controller.scale, closeTo(0.8, 1e-9));
+    await tester.sendKeyEvent(LogicalKeyboardKey.digit0);
+    expect(controller.scale, closeTo(1, 1e-9));
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+  });
+
+  boardTest('an image goes in the middle of the view, selected', (tester) async {
+    await mount(tester);
+    const viewport = Size(800, 600);
+    await tester.runAsync(() async {
+      await controller.insertImage(await noisePng(40, 20), viewport);
+    });
+    await tester.pump();
+
+    final image = session.board.elements.single;
+    expect(image.kind, ElementKind.image);
+    expect(image.bounds.size, const Size(40, 20));
+    expect(image.bounds.center, controller.visibleRect(viewport).center);
+    expect(controller.selection, {image.id});
+    expect(controller.tool, BoardTool.select);
+    final sent = BoardElement.fromJson(
+      (server.last.sentOfType('op').single['put']! as List).single,
+    )!;
+    expect(sent.src, image.src);
   });
 }

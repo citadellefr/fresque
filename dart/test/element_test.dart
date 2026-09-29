@@ -81,4 +81,24 @@ void main() {
     );
     expect(arrow.bounds.left, -arrow.arrowHeadLength);
   });
+
+  test('an image keeps its picture and spans its size', () {
+    final image = BoardElement(
+      id: 'i',
+      kind: ElementKind.image,
+      z: 2,
+      x: 4,
+      y: 6,
+      width: 30,
+      height: 20,
+      color: 0xFF000000,
+      strokeWidth: 8,
+      src: 'data:image/png;base64,AAAA',
+    );
+    expect(image.toJson()['src'], 'data:image/png;base64,AAAA');
+    final back = BoardElement.fromJson(image.toJson())!;
+    expect(back.src, image.src);
+    expect(back.translated(const Offset(1, 1)).src, image.src);
+    expect(back.bounds, const Rect.fromLTWH(4, 6, 30, 20));
+  });
 }

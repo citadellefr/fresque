@@ -16,7 +16,8 @@ the whiteboards of the Documents app, and is released under the MIT license.
 ## Features
 
 - **Drawing tools**: pen, highlighter, line, arrow, rectangle, ellipse, text,
-  eraser, selection, move, bring to front and send to back, undo and redo.
+  image, eraser, selection, move, bring to front and send to back, undo and
+  redo.
 - **Live collaboration**: everyone's cursor, and what they are drawing while
   they draw it. Nobody waits for the server before seeing their own edits.
 - **Every input device**: mouse, touch (two fingers pan and zoom), trackpad
@@ -31,8 +32,8 @@ the whiteboards of the Documents app, and is released under the MIT license.
 
 ## How it works
 
-A board is a set of **elements**: strokes, lines, arrows, rectangles, ellipses
-and texts. An edit replaces or deletes whole elements.
+A board is a set of **elements**: strokes, lines, arrows, rectangles, ellipses,
+texts and images. An edit replaces or deletes whole elements.
 
 The server applies edits in the order it receives them, and every client
 applies them in that same order. The last write of an element wins, and all
@@ -126,6 +127,9 @@ BoardView(controller: controller);
 - `BoardSession` exposes the connection status, the other participants,
   whether every edit is saved, undo and redo, and the edits the server
   refused.
+- `BoardController.insertImage` puts an image file on the board. The image
+  travels inside the board: it is kept as it is when small enough, or scaled
+  down and encoded again to stay under the server's default element limit.
 - `exportPng` renders a board to an image.
 
 The connector is called again on every reconnection. It can fetch a fresh,
@@ -138,6 +142,7 @@ short-lived ticket each time.
 | One finger, mouse, stylus | use the current tool |
 | Two fingers, trackpad | pan and zoom |
 | Wheel | pan (zoom with Ctrl or ⌘) |
+| `Ctrl` + `+` / `-` / `0` | zoom in, zoom out, 100 % |
 | Middle button, Space + drag | pan |
 | Stylus eraser end | erase |
 | `V` `H` `P` `M` `L` `A` `R` `O` `T` `E` | select, hand, pen, highlighter, line, arrow, rectangle, ellipse, text, eraser |
@@ -171,20 +176,22 @@ escapes, once per element. Beyond its id, an element is opaque to the server.
 ```json
 {"fresque":1,"elements":[
 {"id":"k3J9…","k":"s","z":4,"x":120.5,"y":80,"p":[0,0,1.5,2],"c":4280163870,"sw":3},
-{"id":"Qa81…","k":"t","z":5,"x":0,"y":0,"w":84,"h":25,"c":4278190080,"sw":3,"tx":"Hello","fs":20}
+{"id":"Qa81…","k":"t","z":5,"x":0,"y":0,"w":84,"h":25,"c":4278190080,"sw":3,"tx":"Hello","fs":20},
+{"id":"Zu7c…","k":"i","z":6,"x":40,"y":60,"w":320,"h":240,"c":4278190080,"sw":2,"src":"data:image/jpeg;base64,…"}
 ]}
 ```
 
 | Key | Meaning |
 | --- | --- |
-| `k` | kind: `s` stroke, `l` line, `a` arrow, `r` rectangle, `e` ellipse, `t` text |
+| `k` | kind: `s` stroke, `l` line, `a` arrow, `r` rectangle, `e` ellipse, `t` text, `i` image |
 | `x`, `y` | origin |
-| `w`, `h` | size of shapes and texts |
+| `w`, `h` | size of shapes, texts and images |
 | `p` | points, relative to the origin |
 | `c` | ARGB colour |
 | `sw` | stroke width |
 | `f` | filled shape |
 | `tx`, `fs` | text and font size |
+| `src` | picture of an image, as a data URL |
 | `z` | stacking order, ties broken by id |
 
 The file has one element per line, sorted by id. Saving the same board twice

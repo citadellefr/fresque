@@ -53,7 +53,7 @@ bool hits(BoardElement e, Offset p, double tolerance) {
   if (!e.bounds.inflate(tolerance).contains(p)) return false;
   final reach = tolerance + e.strokeWidth / 2;
   switch (e.kind) {
-    case ElementKind.text:
+    case ElementKind.text || ElementKind.image:
       return true;
     case ElementKind.stroke || ElementKind.line || ElementKind.arrow:
       final pts = e.points;

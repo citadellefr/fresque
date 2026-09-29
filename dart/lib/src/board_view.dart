@@ -17,8 +17,8 @@ import 'session.dart';
 ///
 /// Mouse, touch and stylus: one finger or the pen uses the tool, two fingers
 /// pan and zoom, the wheel pans (zooms with Ctrl), the middle button or Space
-/// pans. Once a stylus has been seen, fingers only pan, and its eraser end
-/// erases.
+/// pans, Ctrl with `+`, `-` or `0` zooms. Once a stylus has been seen, fingers
+/// only pan, and its eraser end erases.
 class BoardView extends StatefulWidget {
   const BoardView({required this.controller, this.accentColor, this.gridColor, super.key});
 
@@ -201,6 +201,7 @@ class _BoardViewState extends State<BoardView> {
                         RepaintBoundary(
                           child: CustomPaint(
                             painter: _OverlayPainter(
+                              scene: _scene,
                               session: session,
                               controller: controller,
                               interaction: _interaction,
@@ -442,6 +443,11 @@ class _BoardViewState extends State<BoardView> {
   }
 
   void _signal(PointerSignalEvent e) {
+    // Ctrl and the wheel, on the web
+    if (e is PointerScaleEvent) {
+      controller.zoomAt(e.localPosition, e.scale);
+      return;
+    }
     if (e is! PointerScrollEvent) return;
     final keyboard = HardwareKeyboard.instance;
     if (keyboard.isControlPressed || keyboard.isMetaPressed) {
@@ -485,6 +491,12 @@ class _BoardViewState extends State<BoardView> {
         session.redo();
       } else if (key == LogicalKeyboardKey.keyA) {
         controller.selectAll();
+      } else if (_zoomIn.contains(key)) {
+        controller.zoomBy(1.25, _size);
+      } else if (_zoomOut.contains(key)) {
+        controller.zoomBy(0.8, _size);
+      } else if (key == LogicalKeyboardKey.digit0 || key == LogicalKeyboardKey.numpad0) {
+        controller.zoomBy(1 / controller.scale, _size);
       } else {
         return KeyEventResult.ignored;
       }
@@ -506,6 +518,14 @@ class _BoardViewState extends State<BoardView> {
     controller.tool = tool;
     return KeyEventResult.handled;
   }
+
+  static final _zoomIn = {
+    LogicalKeyboardKey.equal,
+    LogicalKeyboardKey.add,
+    LogicalKeyboardKey.numpadAdd,
+  };
+
+  static final _zoomOut = {LogicalKeyboardKey.minus, LogicalKeyboardKey.numpadSubtract};
 
   static final _shortcuts = {
     LogicalKeyboardKey.keyV: BoardTool.select,
@@ -827,7 +847,7 @@ class _ScenePainter extends CustomPainter {
     required this.controller,
     required this.hidden,
     required this.grid,
-  }) : super(repaint: Listenable.merge([board, controller, hidden]));
+  }) : super(repaint: Listenable.merge([board, controller, hidden, scene]));
 
   static const _spacing = 24.0;
 
@@ -881,13 +901,23 @@ class _ScenePainter extends CustomPainter {
 
 class _OverlayPainter extends CustomPainter {
   _OverlayPainter({
+    required this.scene,
     required this.session,
     required this.controller,
     required this.interaction,
     required this.accent,
     required this.labels,
-  }) : super(repaint: Listenable.merge([session.board, session.presence, controller, interaction]));
+  }) : super(
+         repaint: Listenable.merge([
+           session.board,
+           session.presence,
+           controller,
+           interaction,
+           scene,
+         ]),
+       );
 
+  final Scene scene;
   final BoardSession session;
   final BoardController controller;
   final _Interaction interaction;
@@ -905,11 +935,11 @@ class _OverlayPainter extends CustomPainter {
 
     for (final id in interaction.erasing) {
       final e = board[id];
-      if (e != null) paintElement(canvas, e, opacity: 0.25);
+      if (e != null) paintElement(canvas, e, opacity: 0.25, images: scene.images);
     }
     for (final id in interaction.lifted) {
       final e = board[id];
-      if (e != null) paintElement(canvas, e.translated(interaction.shift));
+      if (e != null) paintElement(canvas, e.translated(interaction.shift), images: scene.images);
     }
     for (final peer in session.peers) {
       final draft = peer.draft;

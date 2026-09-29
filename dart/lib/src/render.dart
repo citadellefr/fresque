@@ -6,12 +6,14 @@ import 'package:flutter/painting.dart';
 
 import 'board.dart';
 import 'element.dart';
+import 'images.dart';
 
 final _paths = Expando<Path>();
 final _texts = Expando<TextPainter>();
 
-/// Draws [e] in board coordinates.
-void paintElement(Canvas canvas, BoardElement e, {double opacity = 1}) {
+/// Draws [e] in board coordinates. An image not decoded in [images] yet is
+/// drawn as a grey box.
+void paintElement(Canvas canvas, BoardElement e, {double opacity = 1, DecodedImages? images}) {
   final color = Color(e.color);
   final stroke = Paint()
     ..color = opacity == 1 ? color : color.withValues(alpha: color.a * opacity)
@@ -52,6 +54,21 @@ void paintElement(Canvas canvas, BoardElement e, {double opacity = 1}) {
         canvas.saveLayer(e.bounds, Paint()..color = Color.fromRGBO(0, 0, 0, opacity));
         painter.paint(canvas, Offset(e.x, e.y));
         canvas.restore();
+      }
+    case ElementKind.image:
+      final rect = Rect.fromLTWH(e.x, e.y, e.width, e.height);
+      final image = images?[e];
+      if (image == null) {
+        canvas.drawRect(rect, Paint()..color = Color.fromRGBO(0, 0, 0, 0.06 * opacity));
+      } else {
+        canvas.drawImageRect(
+          image,
+          Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()),
+          rect,
+          Paint()
+            ..filterQuality = FilterQuality.medium
+            ..color = Color.fromRGBO(0, 0, 0, opacity),
+        );
       }
   }
 }
@@ -96,9 +113,11 @@ void _arrowHead(Canvas canvas, BoardElement e, Paint paint) {
 
 /// The committed elements, recorded once and replayed at any zoom. They are
 /// recorded in chunks of neighbours in stacking order, so that an edit only
-/// records its chunk again.
-class Scene {
+/// records its chunk again. Listeners are told when a picture was decoded.
+class Scene extends ChangeNotifier {
   static const _chunkSize = 256;
+
+  late final images = DecodedImages(onDecoded: _decoded);
 
   final _chunks = <_Chunk>[];
   final _chunkOf = <String, _Chunk>{};
@@ -130,17 +149,30 @@ class Scene {
         if (chunk.elements.isEmpty) _chunks.remove(chunk);
       }
       final e = board[id];
+      if (e?.kind != ElementKind.image) images.forget(id);
       if (e != null && !hidden.contains(id)) _insert(e);
     }
   }
 
   void paint(Canvas canvas) {
     for (final chunk in _chunks) {
-      canvas.drawPicture(chunk.picture);
+      canvas.drawPicture(chunk.picture(images));
     }
   }
 
+  @override
   void dispose() {
+    _clear();
+    images.dispose();
+    super.dispose();
+  }
+
+  void _decoded(String id) {
+    _chunkOf[id]?.clear();
+    notifyListeners();
+  }
+
+  void _clear() {
     for (final chunk in _chunks) {
       chunk.clear();
     }
@@ -150,7 +182,8 @@ class Scene {
   }
 
   void _rebuild(Board board) {
-    dispose();
+    _clear();
+    images.retainWhere((id) => board[id]?.kind == ElementKind.image);
     _built = true;
     for (final e in board.elements) {
       if (_hidden.contains(e.id)) continue;
@@ -197,7 +230,7 @@ class _Chunk {
   final elements = <BoardElement>[];
   ui.Picture? _picture;
 
-  ui.Picture get picture => _picture ??= _record();
+  ui.Picture picture(DecodedImages images) => _picture ??= _record(images);
 
   void insert(BoardElement e) {
     var low = 0, high = elements.length;
@@ -224,11 +257,11 @@ class _Chunk {
     _picture = null;
   }
 
-  ui.Picture _record() {
+  ui.Picture _record(DecodedImages images) {
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
     for (final e in elements) {
-      paintElement(canvas, e);
+      paintElement(canvas, e, images: images);
     }
     return recorder.endRecording();
   }
@@ -250,24 +283,30 @@ Future<Uint8List?> exportPng(
       .reduce((a, b) => a.expandToInclude(b))
       .inflate(margin);
   final scale = math.min(pixelRatio, maxSide / math.max(bounds.width, bounds.height));
-  final recorder = ui.PictureRecorder();
-  final canvas = Canvas(recorder)
-    ..scale(scale)
-    ..translate(-bounds.left, -bounds.top)
-    ..drawRect(bounds, Paint()..color = background);
-  for (final e in elements) {
-    paintElement(canvas, e);
-  }
-  final picture = recorder.endRecording();
-  final image = await picture.toImage(
-    math.max(1, (bounds.width * scale).ceil()),
-    math.max(1, (bounds.height * scale).ceil()),
-  );
-  picture.dispose();
+  final images = DecodedImages();
   try {
-    final data = await image.toByteData(format: ui.ImageByteFormat.png);
-    return data?.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+    await images.decodeAll(elements);
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder)
+      ..scale(scale)
+      ..translate(-bounds.left, -bounds.top)
+      ..drawRect(bounds, Paint()..color = background);
+    for (final e in elements) {
+      paintElement(canvas, e, images: images);
+    }
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(
+      math.max(1, (bounds.width * scale).ceil()),
+      math.max(1, (bounds.height * scale).ceil()),
+    );
+    picture.dispose();
+    try {
+      final data = await image.toByteData(format: ui.ImageByteFormat.png);
+      return data?.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+    } finally {
+      image.dispose();
+    }
   } finally {
-    image.dispose();
+    images.dispose();
   }
 }
