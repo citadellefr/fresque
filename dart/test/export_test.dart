@@ -28,16 +28,41 @@ void main() {
     expect(pdf, contains('/MediaBox [0 0 595.50 842.25]'));
   });
 
-  test('a wide drawing is cut into landscape pages at full resolution', () async {
-    final pdf = await pdfOf([rect('a'), rect('b', x: 2000)], pixelRatio: 2);
+  test('shapes far apart get a page each', () async {
+    final pdf = await pdfOf([rect('a'), rect('b', x: 5000)]);
+    expect(pages(pdf), 2);
+  });
+
+  test('shapes that fit together share a page, turned like them', () async {
+    final pdf = await pdfOf([rect('a'), rect('b', x: 700), rect('c', x: 1400)], pixelRatio: 2);
     expect(pages(pdf), 2);
     expect(pdf, contains('/MediaBox [0 0 842.25 595.50]'));
     expect(pdf, contains('/Width 2246 /Height 1588'));
   });
 
-  test('skips the pages left blank', () async {
-    final pdf = await pdfOf([rect('a'), rect('b', x: 5000)]);
-    expect(pdf, contains('/Count 2'));
+  test('a chain of close shapes is never cut', () async {
+    final pdf = await pdfOf([
+      for (var i = 0; i < 60; i++) rect('$i', x: i * 30.0),
+    ]);
+    expect(pages(pdf), 1);
+  });
+
+  test('a group larger than a page is scaled onto one, at full resolution', () async {
+    final big = BoardElement(
+      id: 'big',
+      kind: ElementKind.rectangle,
+      z: 1,
+      x: 0,
+      y: 0,
+      width: 3000,
+      height: 1000,
+      color: 0xFF000000,
+    );
+    final pdf = await pdfOf([big]);
+    expect(pages(pdf), 1);
+    expect(pdf, contains('/MediaBox [0 0 842.25 595.50]'));
+    final width = int.parse(RegExp(r'/Width (\d+)').firstMatch(pdf)!.group(1)!);
+    expect(width, greaterThan(3000));
   });
 
   test('the cross-reference table points at each object', () async {

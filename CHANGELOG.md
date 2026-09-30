@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1
+
+- `exportPdf` no longer cuts through shapes: elements less than the margin
+  apart form groups, and each page gathers whole groups that fit together on
+  A4. A group larger than A4 gets a page of its own, scaled down to it but
+  still rendered at full resolution.
+
 ## 0.3.0
 
 - `exportPdf` renders a board to a PDF: the drawing is cut at its real size

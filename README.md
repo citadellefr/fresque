@@ -131,7 +131,8 @@ BoardView(controller: controller);
   travels inside the board: it is kept as it is when small enough, or scaled
   down and encoded again to stay under the server's default element limit.
 - `exportPng` renders a board to an image, scaled down past 8192 pixels.
-  `exportPdf` cuts it into A4 pages at full resolution instead.
+  `exportPdf` lays it out on A4 pages at full resolution instead, without
+  cutting through shapes.
 
 The connector is called again on every reconnection. It can fetch a fresh,
 short-lived ticket each time.

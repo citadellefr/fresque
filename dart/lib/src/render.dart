@@ -299,41 +299,60 @@ Future<Uint8List?> exportPng(
 /// A4 in board units, at 96 per inch.
 const _a4 = Size(794, 1123);
 
-/// The whole board as a PDF, or null when it is empty. The drawing and
-/// [margin] around it are cut at their real size into A4 pages, turned like
-/// the drawing, each rendered at [pixelRatio]: a large board takes more pages
-/// rather than less detail. Pages the cut leaves blank are skipped. The
-/// [background] is opaque.
+/// The whole board as a PDF, or null when it is empty. Elements closer than
+/// [margin] form groups that a page never cuts: each page gathers the groups
+/// that fit together on A4 at their real size, turned like them, with [margin]
+/// around. A group too large for A4 gets a page of its own, scaled down to it.
+/// Pages are rendered at [pixelRatio], lowered only past [maxSide] pixels, on
+/// an opaque [background].
 Future<Uint8List?> exportPdf(
   Board board, {
   double pixelRatio = 2,
   Color background = const Color(0xFFFFFFFF),
   double margin = 32,
+  int maxSide = 8192,
 }) async {
   final elements = board.elements;
   if (elements.isEmpty) return null;
-  final bounds = _bounds(elements, margin);
-  final page = bounds.width > bounds.height ? _a4.flipped : _a4;
-  final columns = (bounds.width / page.width).ceil();
-  final rows = (bounds.height / page.height).ceil();
-  final origin = bounds.center - Offset(columns * page.width, rows * page.height) / 2;
+  final groups = [
+    for (final group in _groups(elements, margin))
+      (elements: group, bounds: _bounds(group, margin)),
+  ];
   final pdf = PdfPictures();
   final images = DecodedImages();
   try {
     await images.decodeAll(elements);
-    for (var row = 0; row < rows; row++) {
-      for (var column = 0; column < columns; column++) {
-        final rect = origin.translate(column * page.width, row * page.height) & page;
-        final drawn = elements.where((e) => e.bounds.overlaps(rect)).toList();
-        if (drawn.isEmpty) continue;
-        final image = await _render(drawn, images, rect, pixelRatio, background);
-        try {
-          final rgb = await _rgb(image, background);
-          if (rgb == null) continue;
-          pdf.addPage(page.width * 0.75, page.height * 0.75, image.width, image.height, rgb);
-        } finally {
-          image.dispose();
-        }
+    while (groups.isNotEmpty) {
+      final first = groups.reduce((a, b) => _readFirst(a.bounds, b.bounds) ? a : b);
+      groups.remove(first);
+      var area = first.bounds;
+      final drawn = {...first.elements};
+      final center = first.bounds.center;
+      double distance(Rect r) => (r.center - center).distance;
+      final nearest = [...groups]
+        ..sort((a, b) => distance(a.bounds).compareTo(distance(b.bounds)));
+      for (final group in nearest) {
+        final both = area.expandToInclude(group.bounds);
+        if (both.size.shortestSide > _a4.width || both.size.longestSide > _a4.height) continue;
+        area = both;
+        drawn.addAll(group.elements);
+        groups.remove(group);
+      }
+      final paper = area.width > area.height ? _a4.flipped : _a4;
+      final grow = math.max(1.0, math.max(area.width / paper.width, area.height / paper.height));
+      final rect = Rect.fromCenter(
+        center: area.center,
+        width: paper.width * grow,
+        height: paper.height * grow,
+      );
+      final scale = math.min(pixelRatio, maxSide / rect.longestSide);
+      final image = await _render(elements.where(drawn.contains), images, rect, scale, background);
+      try {
+        final rgb = await _rgb(image, background);
+        if (rgb == null) continue;
+        pdf.addPage(paper.width * 0.75, paper.height * 0.75, image.width, image.height, rgb);
+      } finally {
+        image.dispose();
       }
     }
   } finally {
@@ -341,6 +360,32 @@ Future<Uint8List?> exportPdf(
   }
   return pdf.close();
 }
+
+/// [elements] in groups linked by bounds less than [gap] apart.
+List<List<BoardElement>> _groups(List<BoardElement> elements, double gap) {
+  final sorted = [...elements]..sort((a, b) => a.bounds.left.compareTo(b.bounds.left));
+  final parent = List.generate(sorted.length, (i) => i);
+  int root(int i) {
+    while (parent[i] != i) {
+      i = parent[i] = parent[parent[i]];
+    }
+    return i;
+  }
+
+  for (var i = 0; i < sorted.length; i++) {
+    final near = sorted[i].bounds.inflate(gap);
+    for (var j = i + 1; j < sorted.length && sorted[j].bounds.left < near.right; j++) {
+      if (sorted[j].bounds.overlaps(near)) parent[root(j)] = root(i);
+    }
+  }
+  final groups = <int, List<BoardElement>>{};
+  for (var i = 0; i < sorted.length; i++) {
+    (groups[root(i)] ??= []).add(sorted[i]);
+  }
+  return groups.values.toList();
+}
+
+bool _readFirst(Rect a, Rect b) => a.top < b.top || a.top == b.top && a.left <= b.left;
 
 Rect _bounds(List<BoardElement> elements, double margin) =>
     elements.map((e) => e.bounds).reduce((a, b) => a.expandToInclude(b)).inflate(margin);
