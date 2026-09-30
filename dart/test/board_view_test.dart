@@ -192,4 +192,78 @@ void main() {
     )!;
     expect(sent.src, image.src);
   });
+
+  boardTest('following keeps the edits of a peer on screen until the view is panned', (tester) async {
+    await mount(
+      tester,
+      greeting: hello(
+        peers: [
+          {'sid': 2, 'id': '7', 'name': 'Alice'},
+        ],
+      ),
+    );
+    final size = tester.getSize(find.byType(BoardView));
+    bool onScreen(Rect area) => (Offset.zero & size).contains(controller.toScreen(area.center));
+
+    final far = rect('far', x: 5000, y: -3000);
+    server.last.receive({
+      't': 'op',
+      'sid': 2,
+      'put': [far.toJson()],
+    });
+    await tester.pump();
+    expect(onScreen(far.bounds), isFalse);
+    controller.follow('7');
+    expect(onScreen(far.bounds), isTrue);
+
+    final wide = BoardElement(
+      id: 'wide',
+      kind: ElementKind.rectangle,
+      z: 2,
+      x: 0,
+      y: 0,
+      width: 4000,
+      height: 10,
+      color: 0xFF000000,
+    );
+    server.last.receive({
+      't': 'eph',
+      'sid': 2,
+      'd': {
+        'd': {...wide.toJson(), 'o': 0},
+      },
+    });
+    await tester.pump();
+    expect(controller.scale, lessThan(1));
+    expect(controller.toScreen(wide.bounds.topLeft).dx, greaterThanOrEqualTo(0));
+    expect(controller.toScreen(wide.bounds.bottomRight).dx, lessThanOrEqualTo(size.width));
+
+    controller.tool = BoardTool.hand;
+    await tester.dragFrom(const Offset(200, 200), const Offset(40, 0));
+    await tester.pump();
+    expect(controller.following, isNull);
+    final offset = controller.offset;
+    server.last.receive({
+      't': 'op',
+      'sid': 2,
+      'put': [rect('elsewhere', x: -9000, y: 9000).toJson()],
+    });
+    await tester.pump();
+    expect(controller.offset, offset);
+  });
+
+  boardTest('following stops when the peer leaves', (tester) async {
+    await mount(
+      tester,
+      greeting: hello(
+        peers: [
+          {'sid': 2, 'id': '7', 'name': 'Alice'},
+        ],
+      ),
+    );
+    controller.follow('7');
+    server.last.receive({'t': 'leave', 'sid': 2});
+    await tester.pump();
+    expect(controller.following, isNull);
+  });
 }

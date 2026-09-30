@@ -20,6 +20,7 @@ the whiteboards of the Documents app, and is released under the MIT license.
   redo.
 - **Live collaboration**: everyone's cursor, and what they are drawing while
   they draw it. Nobody waits for the server before seeing their own edits.
+  Anyone, a read-only viewer included, can follow someone's edits.
 - **Every input device**: mouse, touch (two fingers pan and zoom), trackpad
   and stylus with palm rejection. The stylus eraser end erases. Keyboard
   shortcuts are included.
@@ -124,6 +125,8 @@ BoardView(controller: controller);
 
 - `BoardController` holds the tool, colour and stroke width, the selection
   and the viewport. Style changes also apply to the selection.
+  `follow(peerId)` keeps one peer's edits on screen until the view is panned
+  by hand or the peer leaves.
 - `BoardSession` exposes the connection status, the other participants,
   whether every edit is saved, undo and redo, and the edits the server
   refused.

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0
+
+- Following: `BoardController.follow` keeps the edits of one peer on screen,
+  by peer id. The view moves as little as it can to show what they draw, add
+  or erase, zooms out only when that would not fit, and jumps to where they
+  last edited as soon as following starts. Panning by hand, or the peer
+  leaving, stops it. `BoardController.reveal` brings any area into view.
+- `BoardPeer.lastEdit` is where a peer last changed the board, their drawing
+  in progress included, and `BoardSession.edits` tells when it moves.
+
 ## 0.3.1
 
 - `exportPdf` no longer cuts through shapes: elements less than the margin

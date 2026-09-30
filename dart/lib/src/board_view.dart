@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' show PointMode;
 
@@ -89,6 +90,8 @@ class _BoardViewState extends State<BoardView> {
   var _fitted = false;
   var _size = Size.zero;
   _TextEditing? _editing;
+  StreamSubscription<BoardPeer>? _edits;
+  String? _followed;
   String? _lastTapId;
   DateTime _lastTapAt = DateTime(0);
 
@@ -105,16 +108,24 @@ class _BoardViewState extends State<BoardView> {
     super.initState();
     session.addListener(_fitOnce);
     board.addListener(_boardChanged);
+    controller.addListener(_followChanged);
+    _edits = session.edits.listen(_edited);
   }
 
   @override
   void didUpdateWidget(BoardView old) {
     super.didUpdateWidget(old);
+    if (old.controller != controller) {
+      old.controller.removeListener(_followChanged);
+      controller.addListener(_followChanged);
+    }
     if (old.controller.session != session) {
       old.controller.session.removeListener(_fitOnce);
       old.controller.session.board.removeListener(_boardChanged);
+      unawaited(_edits?.cancel());
       session.addListener(_fitOnce);
       board.addListener(_boardChanged);
+      _edits = session.edits.listen(_edited);
       _fitted = false;
     }
   }
@@ -123,6 +134,8 @@ class _BoardViewState extends State<BoardView> {
   void dispose() {
     session.removeListener(_fitOnce);
     board.removeListener(_boardChanged);
+    controller.removeListener(_followChanged);
+    unawaited(_edits?.cancel());
     _editing?.dispose();
     _scene.dispose();
     _interaction.dispose();
@@ -138,6 +151,27 @@ class _BoardViewState extends State<BoardView> {
     if (_fitted || session.status != BoardStatus.online || _size.isEmpty) return;
     _fitted = true;
     controller.fit(_size);
+  }
+
+  void _edited(BoardPeer peer) {
+    final area = peer.lastEdit;
+    if (area != null && peer.id == controller.following) controller.reveal(area, _size);
+  }
+
+  /// Brings the peer just followed into view: where they last edited, or else
+  /// their pointer.
+  void _followChanged() {
+    final id = controller.following;
+    if (id == _followed) return;
+    _followed = id;
+    for (final peer in session.peers.where((peer) => peer.id == id)) {
+      final cursor = peer.cursor;
+      final area = peer.lastEdit ?? (cursor == null ? null : cursor & Size.zero);
+      if (area != null) {
+        controller.reveal(area, _size);
+        return;
+      }
+    }
   }
 
   void _boardChanged() {

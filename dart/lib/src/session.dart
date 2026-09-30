@@ -77,11 +77,15 @@ class BoardPeer {
 
   Offset? _cursor;
   BoardElement? _draft;
+  Rect? _lastEdit;
 
   Offset? get cursor => _cursor;
 
   /// What the peer is drawing right now, before it becomes an element.
   BoardElement? get draft => _draft;
+
+  /// Where the peer last changed the board, drawing in progress included.
+  Rect? get lastEdit => _lastEdit;
 }
 
 class _Change {
@@ -116,6 +120,7 @@ class BoardSession extends ChangeNotifier {
   final _undo = <_Change>[];
   final _redo = <_Change>[];
   final _rejections = StreamController<String>.broadcast();
+  final _edits = StreamController<BoardPeer>.broadcast();
 
   BoardStatus _status = BoardStatus.connecting;
   Object? _failure;
@@ -159,6 +164,9 @@ class BoardSession extends ChangeNotifier {
   /// Why the server refused a local edit, which has been rolled back.
   Stream<String> get rejections => _rejections.stream;
 
+  /// The peer whose [BoardPeer.lastEdit] just moved.
+  Stream<BoardPeer> get edits => _edits.stream;
+
   void start() {
     if (_running || _disposed) return;
     _running = true;
@@ -192,6 +200,7 @@ class BoardSession extends ChangeNotifier {
     _disposed = true;
     unawaited(stop());
     unawaited(_rejections.close());
+    unawaited(_edits.close());
     board.dispose();
     (presence as _Presence).dispose();
     super.dispose();
@@ -432,8 +441,15 @@ class BoardSession extends ChangeNotifier {
       for (final id in _list(op['del']))
         if (id is String) id,
     ];
-    board.applyRemote(put, delete);
     final peer = _peers[_int(op['sid'])];
+    final areas = [
+      for (final e in put) e.bounds,
+      for (final id in delete) ?board[id]?.bounds,
+    ];
+    board.applyRemote(put, delete);
+    if (peer != null && areas.isNotEmpty) {
+      _edited(peer, areas.reduce((a, b) => a.expandToInclude(b)));
+    }
     final draft = peer?._draft;
     if (draft != null && (put.any((e) => e.id == draft.id) || delete.contains(draft.id))) {
       peer!._draft = null;
@@ -465,8 +481,14 @@ class BoardSession extends ChangeNotifier {
             ..setAll(from, draft.points),
         );
       }
+      if (peer._draft case final draft?) _edited(peer, draft.bounds);
     }
     (presence as _Presence).changed();
+  }
+
+  void _edited(BoardPeer peer, Rect area) {
+    peer._lastEdit = area;
+    _edits.add(peer);
   }
 
   static BoardPeer? _peer(Object? raw) {

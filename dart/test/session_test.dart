@@ -214,4 +214,52 @@ void main() {
     expect(server.last.sentOfType('op'), isEmpty);
     expect(session.board['a'], isNull);
   });
+
+  test('tells where each peer last edited, drawing included', () async {
+    await connect(
+      greeting: hello(
+        elements: [rect('old', x: 500, y: 500).toJson()],
+        peers: [
+          {'sid': 2, 'id': '7', 'name': 'Alice'},
+        ],
+      ),
+    );
+    final edits = <BoardPeer>[];
+    final subscription = session.edits.listen(edits.add);
+    addTearDown(subscription.cancel);
+    final alice = session.peers.single;
+
+    server.last.receive({
+      't': 'eph',
+      'sid': 2,
+      'd': {
+        'd': {...rect('r', x: 100, y: 100).toJson(), 'o': 0},
+      },
+    });
+    await pumpEventQueue();
+    expect(alice.lastEdit, rect('r', x: 100, y: 100).bounds);
+
+    server.last.receive({
+      't': 'op',
+      'sid': 2,
+      'put': [rect('r', x: 100, y: 100).toJson()],
+      'del': ['old'],
+    });
+    await pumpEventQueue();
+    expect(
+      alice.lastEdit,
+      rect('r', x: 100, y: 100).bounds.expandToInclude(rect('old', x: 500, y: 500).bounds),
+    );
+    expect(edits, [alice, alice]);
+
+    server.last.receive({
+      't': 'eph',
+      'sid': 2,
+      'd': {
+        'c': [1, 2],
+      },
+    });
+    await pumpEventQueue();
+    expect(edits, hasLength(2));
+  });
 }

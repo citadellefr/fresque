@@ -13,7 +13,9 @@ enum BoardTool { select, hand, pen, highlighter, line, arrow, rectangle, ellipse
 /// What a [BoardView] draws with, what is selected and which part of the board
 /// is on screen. Style changes also apply to the selection.
 class BoardController extends ChangeNotifier {
-  BoardController(this.session, {this._tool = BoardTool.pen, this._color = 0xFF1E1E1E});
+  BoardController(this.session, {this._tool = BoardTool.pen, this._color = 0xFF1E1E1E}) {
+    session.addListener(_peersChanged);
+  }
 
   static const minScale = 0.1;
   static const maxScale = 8.0;
@@ -27,6 +29,7 @@ class BoardController extends ChangeNotifier {
   Set<String> _selection = const {};
   double _scale = 1;
   Offset _offset = Offset.zero;
+  String? _following;
 
   BoardTool get tool => _tool;
   int get color => _color;
@@ -35,6 +38,16 @@ class BoardController extends ChangeNotifier {
   Set<String> get selection => _selection;
   double get scale => _scale;
   Offset get offset => _offset;
+
+  /// The id of the peer whose edits the view keeps on screen, until the view
+  /// is panned by hand or they leave.
+  String? get following => _following;
+
+  @override
+  void dispose() {
+    session.removeListener(_peersChanged);
+    super.dispose();
+  }
 
   set tool(BoardTool tool) {
     if (tool == _tool) return;
@@ -134,6 +147,20 @@ class BoardController extends ChangeNotifier {
     if (changed.isNotEmpty) session.apply(put: changed);
   }
 
+  void follow(String? peerId) {
+    if (peerId == _following) return;
+    _following = peerId;
+    notifyListeners();
+  }
+
+  void _peersChanged() {
+    final id = _following;
+    if (id == null || session.status != BoardStatus.online) return;
+    if (session.peers.any((peer) => peer.id == id)) return;
+    _following = null;
+    notifyListeners();
+  }
+
   Offset toWorld(Offset screen) => (screen - _offset) / _scale;
 
   Offset toScreen(Offset world) => world * _scale + _offset;
@@ -144,7 +171,46 @@ class BoardController extends ChangeNotifier {
   void panBy(Offset delta) {
     if (delta == Offset.zero) return;
     _offset += delta;
+    _following = null;
     notifyListeners();
+  }
+
+  /// Brings [area] into [viewport], [padding] inside its edges: the view moves
+  /// as little as it can, and zooms out only if [area] would not fit.
+  void reveal(Rect area, Size viewport, {double padding = 48}) {
+    if (viewport.isEmpty) return;
+    final inset = math.min(padding, viewport.shortestSide / 4);
+    final room = (Offset.zero & viewport).deflate(inset);
+    final fits = math.min(
+      room.width / math.max(area.width, 1),
+      room.height / math.max(area.height, 1),
+    );
+    final scale = math.max(math.min(_scale, fits), minScale);
+    final Offset offset;
+    if (scale != _scale) {
+      offset = room.center - area.center * scale;
+    } else {
+      final screen = Rect.fromPoints(toScreen(area.topLeft), toScreen(area.bottomRight));
+      offset =
+          _offset +
+          Offset(
+            _shift(screen.left, screen.right, room.left, room.right),
+            _shift(screen.top, screen.bottom, room.top, room.bottom),
+          );
+    }
+    if (scale == _scale && offset == _offset) return;
+    _scale = scale;
+    _offset = offset;
+    notifyListeners();
+  }
+
+  /// How far to move [start]–[end] to lie within [min]–[max], centred when
+  /// it is longer.
+  static double _shift(double start, double end, double min, double max) {
+    if (end - start > max - min) return (min + max - start - end) / 2;
+    if (start < min) return min - start;
+    if (end > max) return max - end;
+    return 0;
   }
 
   /// Zooms by [factor] around the middle of [viewport].
