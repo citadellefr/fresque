@@ -26,6 +26,7 @@ class BoardController extends ChangeNotifier {
   int _color;
   double _strokeWidth = 3;
   bool _filled = false;
+  BoardDash _dash = BoardDash.solid;
   Set<String> _selection = const {};
   double _scale = 1;
   Offset _offset = Offset.zero;
@@ -35,6 +36,7 @@ class BoardController extends ChangeNotifier {
   int get color => _color;
   double get strokeWidth => _strokeWidth;
   bool get filled => _filled;
+  BoardDash get dash => _dash;
   Set<String> get selection => _selection;
   double get scale => _scale;
   Offset get offset => _offset;
@@ -74,10 +76,14 @@ class BoardController extends ChangeNotifier {
 
   set filled(bool filled) {
     _filled = filled;
+    _restyle((e) => e.canFill ? e.copyWith(filled: filled) : e);
+    notifyListeners();
+  }
+
+  set dash(BoardDash dash) {
+    _dash = dash;
     _restyle(
-      (e) => e.kind == ElementKind.rectangle || e.kind == ElementKind.ellipse
-          ? e.copyWith(filled: filled)
-          : e,
+      (e) => e.kind == ElementKind.text || e.kind == ElementKind.image ? e : e.copyWith(dash: dash),
     );
     notifyListeners();
   }

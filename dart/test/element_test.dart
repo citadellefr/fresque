@@ -101,4 +101,29 @@ void main() {
     expect(back.translated(const Offset(1, 1)).src, image.src);
     expect(back.bounds, const Rect.fromLTWH(4, 6, 30, 20));
   });
+
+  test('a dashed polygon keeps its corners and its dashes', () {
+    final polygon = BoardElement(
+      id: 'g',
+      kind: ElementKind.polygon,
+      z: 1,
+      x: 5,
+      y: 5,
+      points: Float32List.fromList([0, 0, 40, 0, 20, 30]),
+      color: 0,
+      strokeWidth: 2,
+      filled: true,
+      dash: BoardDash.dotted,
+    );
+    final json = polygon.toJson();
+    expect(json['k'], 'g');
+    expect(json['d'], 2);
+    final back = BoardElement.fromJson(json)!;
+    expect(back.kind, ElementKind.polygon);
+    expect(back.dash, BoardDash.dotted);
+    expect(back.filled, isTrue);
+    expect(back.bounds, const Rect.fromLTRB(4, 4, 46, 36));
+    expect(BoardElement.fromJson({...json, 'd': null})!.dash, BoardDash.solid);
+    expect(polygon.copyWith(dash: BoardDash.solid).toJson().containsKey('d'), isFalse);
+  });
 }

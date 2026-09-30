@@ -16,8 +16,10 @@ the whiteboards of the Documents app, and is released under the MIT license.
 ## Features
 
 - **Drawing tools**: pen, highlighter, line, arrow, rectangle, ellipse, text,
-  image, eraser, selection, move, bring to front and send to back, undo and
-  redo.
+  image (SVG included), eraser, selection, move, resize, bring to front and
+  send to back, undo and redo. Any width, solid, dashed or dotted.
+- **Shape correction**: a stroke drawn with Ctrl held becomes the clean line,
+  ellipse, circle, rectangle, square or polygon it stands for.
 - **Live collaboration**: everyone's cursor, and what they are drawing while
   they draw it. Nobody waits for the server before seeing their own edits.
   Anyone, a read-only viewer included, can follow someone's edits.
@@ -132,7 +134,8 @@ BoardView(controller: controller);
   refused.
 - `BoardController.insertImage` puts an image file on the board. The image
   travels inside the board: it is kept as it is when small enough, or scaled
-  down and encoded again to stay under the server's default element limit.
+  down and encoded again to stay under the server's default element limit. An
+  SVG is rendered once to a sharp picture.
 - `exportPng` renders a board to an image, scaled down past 8192 pixels.
   `exportPdf` lays it out on A4 pages at full resolution instead, without
   cutting through shapes.
@@ -145,6 +148,8 @@ short-lived ticket each time.
 | Input | Action |
 | --- | --- |
 | One finger, mouse, stylus | use the current tool |
+| Ctrl + pen or highlighter | draw a clean shape |
+| Corner of a selected shape or image | resize (Shift keeps a shape's proportions) |
 | Two fingers, trackpad | pan and zoom |
 | Wheel | pan (zoom with Ctrl or ⌘) |
 | `Ctrl` + `+` / `-` / `0` | zoom in, zoom out, 100 % |
@@ -188,13 +193,14 @@ escapes, once per element. Beyond its id, an element is opaque to the server.
 
 | Key | Meaning |
 | --- | --- |
-| `k` | kind: `s` stroke, `l` line, `a` arrow, `r` rectangle, `e` ellipse, `t` text, `i` image |
+| `k` | kind: `s` stroke, `l` line, `a` arrow, `r` rectangle, `e` ellipse, `g` polygon, `t` text, `i` image |
 | `x`, `y` | origin |
 | `w`, `h` | size of shapes, texts and images |
 | `p` | points, relative to the origin |
 | `c` | ARGB colour |
 | `sw` | stroke width |
 | `f` | filled shape |
+| `d` | outline: `1` dashed, `2` dotted, solid when absent |
 | `tx`, `fs` | text and font size |
 | `src` | picture of an image, as a data URL |
 | `z` | stacking order, ties broken by id |

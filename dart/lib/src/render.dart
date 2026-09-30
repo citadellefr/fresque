@@ -24,7 +24,7 @@ void paintElement(Canvas canvas, BoardElement e, {double opacity = 1, DecodedIma
     ..strokeJoin = StrokeJoin.round;
 
   switch (e.kind) {
-    case ElementKind.stroke || ElementKind.line || ElementKind.arrow:
+    case ElementKind.stroke || ElementKind.line || ElementKind.arrow || ElementKind.polygon:
       final p = e.points;
       if (p.length < 2) return;
       canvas.save();
@@ -36,17 +36,20 @@ void paintElement(Canvas canvas, BoardElement e, {double opacity = 1, DecodedIma
           stroke..style = PaintingStyle.fill,
         );
       } else {
-        canvas.drawPath(_paths[p] ??= _path(p), stroke);
+        final polygon = e.kind == ElementKind.polygon;
+        final path = _paths[p] ??= polygon ? (Path()..addPolygon(_offsets(p), true)) : _path(p);
+        if (polygon && e.filled) canvas.drawPath(path, _fill(stroke.color));
+        canvas.drawPath(_dashed(path, e), stroke);
         if (e.kind == ElementKind.arrow) _arrowHead(canvas, e, stroke);
       }
       canvas.restore();
     case ElementKind.rectangle || ElementKind.ellipse:
       final rect = Rect.fromLTWH(e.x, e.y, e.width, e.height);
-      final draw = e.kind == ElementKind.rectangle ? canvas.drawRect : canvas.drawOval;
-      if (e.filled) {
-        draw(rect, Paint()..color = stroke.color.withValues(alpha: stroke.color.a * 0.25));
-      }
-      draw(rect, stroke);
+      final outline = e.kind == ElementKind.rectangle
+          ? (Path()..addRect(rect))
+          : (Path()..addOval(rect));
+      if (e.filled) canvas.drawPath(outline, _fill(stroke.color));
+      canvas.drawPath(_dashed(outline, e), stroke);
     case ElementKind.text:
       final painter = _texts[e] ??= textPainter(e);
       if (opacity == 1) {
@@ -88,6 +91,30 @@ TextStyle textStyle(int color, double fontSize) => TextStyle(
   height: 1.25,
   textBaseline: TextBaseline.alphabetic,
 );
+
+Paint _fill(Color color) => Paint()..color = color.withValues(alpha: color.a * 0.25);
+
+List<Offset> _offsets(Float32List p) => [
+  for (var i = 0; i + 1 < p.length; i += 2) Offset(p[i], p[i + 1]),
+];
+
+/// [path] cut into dashes or dots for [e], or as it is when it is solid. The
+/// round caps lengthen each dash by the width of the stroke, and shorten each
+/// gap as much.
+Path _dashed(Path path, BoardElement e) {
+  if (e.dash == BoardDash.solid) return path;
+  final width = e.strokeWidth;
+  final (on, off) = e.dash == BoardDash.dashed
+      ? (3 * width + 4, 3 * width + 4)
+      : (0.01, 2 * width + 3);
+  final out = Path();
+  for (final metric in path.computeMetrics()) {
+    for (var at = 0.0; at < metric.length; at += on + off) {
+      out.addPath(metric.extractPath(at, math.min(at + on, metric.length)), Offset.zero);
+    }
+  }
+  return out;
+}
 
 /// A smooth curve through the points: quadratic segments between their
 /// midpoints.

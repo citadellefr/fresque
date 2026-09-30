@@ -78,4 +78,22 @@ void main() {
     );
     expect(hitTop([low], const Offset(50, 50), 1), isNull);
   });
+
+  test('a polygon is hit on its sides, the closing one included, and inside once filled', () {
+    final triangle = BoardElement(
+      id: 'g',
+      kind: ElementKind.polygon,
+      z: 0,
+      x: 100,
+      y: 100,
+      points: Float32List.fromList([0, 0, 100, 0, 0, 100]),
+      color: 0,
+      strokeWidth: 2,
+    );
+    expect(hits(triangle, const Offset(150, 100), 2), isTrue);
+    expect(hits(triangle, const Offset(100, 150), 2), isTrue);
+    expect(hits(triangle, const Offset(125, 125), 2), isFalse);
+    expect(hits(triangle.copyWith(filled: true), const Offset(125, 125), 2), isTrue);
+    expect(hits(triangle.copyWith(filled: true), const Offset(190, 190), 2), isFalse);
+  });
 }

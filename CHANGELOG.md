@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.5.0
+
+- Shape correction: a pen or highlighter stroke drawn with Ctrl (or ⌘) held
+  becomes the shape it stands for, shown as such while drawing: a straight
+  line, levelled when nearly so, an ellipse or a circle, a rectangle or a
+  square, or a polygon of up to eight sides. `recognizeShape` is not exported:
+  the view does it.
+- Polygons: a new kind, `g`, closed and straight-sided, which can be filled.
+  Older clients leave them alone.
+- Dashes: `BoardController.dash` draws lines, strokes and shapes dashed or
+  dotted, stored as `d` and restyling the selection like the other settings.
+- Resizing: the corners of a single selected image, rectangle or ellipse can be
+  dragged. An image keeps its proportions, a shape keeps them with Shift.
+- SVG images: `insertImage` takes SVG files, rendered once to a picture
+  1600 pixels long and drawn at the size the file declares. Adds
+  `flutter_svg`.
+
 ## 0.4.0
 
 - Following: `BoardController.follow` keeps the edits of one peer on screen,

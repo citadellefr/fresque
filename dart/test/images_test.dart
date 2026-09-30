@@ -38,8 +38,26 @@ void main() {
     expect(image.size.width, maxImageSide);
   });
 
+  test('draws an SVG at its own size, from a sharp picture', () async {
+    final svg = utf8.encode(
+      '<?xml version="1.0"?>\n'
+      '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20">'
+      '<rect width="20" height="20" fill="#1976D2"/></svg>',
+    );
+    final image = await prepareImage(svg);
+    expect(image.size, const ui.Size(40, 20));
+    expect(image.src, startsWith('data:image/png;base64,'));
+    final picture = await ui.instantiateImageCodec(UriData.parse(image.src).contentAsBytes());
+    final frame = await picture.getNextFrame();
+    expect(frame.image.width, maxImageSide);
+    expect(frame.image.height, maxImageSide / 2);
+    frame.image.dispose();
+    picture.dispose();
+  });
+
   test('refuses what is not an image', () async {
     await expectLater(prepareImage(utf8.encode('not an image')), throwsFormatException);
+    await expectLater(prepareImage(utf8.encode('<svg><rect')), throwsFormatException);
   });
 
   test('a scene draws an image again once it is decoded', () async {

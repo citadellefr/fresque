@@ -13,13 +13,16 @@ import 'element.dart';
 import 'geometry.dart';
 import 'render.dart';
 import 'session.dart';
+import 'shapes.dart';
 
 /// The board of [controller]'s session, drawn and edited with its tool.
 ///
 /// Mouse, touch and stylus: one finger or the pen uses the tool, two fingers
 /// pan and zoom, the wheel pans (zooms with Ctrl), the middle button or Space
 /// pans, Ctrl with `+`, `-` or `0` zooms. Once a stylus has been seen, fingers
-/// only pan, and its eraser end erases.
+/// only pan, and its eraser end erases. Drawing with Ctrl held turns the
+/// stroke into the shape it stands for, and the corners of a selected shape or
+/// image resize it.
 class BoardView extends StatefulWidget {
   const BoardView({required this.controller, this.accentColor, this.gridColor, super.key});
 
@@ -42,11 +45,12 @@ class _Interaction extends ChangeNotifier {
   Set<String> erasing = const {};
   Rect? marquee;
   String? editing;
+  BoardElement? resized;
 
   final hidden = ValueNotifier<Set<String>>(const {});
 
   void changed() {
-    final next = {...lifted, ...erasing, ?editing};
+    final next = {...lifted, ...erasing, ?editing, ?resized?.id};
     if (!_sameSet(next, hidden.value)) hidden.value = next;
     notifyListeners();
   }
@@ -59,6 +63,24 @@ class _Interaction extends ChangeNotifier {
 }
 
 bool _sameSet(Set<String> a, Set<String> b) => a.length == b.length && a.containsAll(b);
+
+bool get _commandPressed {
+  final keyboard = HardwareKeyboard.instance;
+  return keyboard.isControlPressed || keyboard.isMetaPressed;
+}
+
+/// The selection when its corners can be dragged: a single shape or image.
+BoardElement? _resizable(BoardController controller) {
+  if (controller.session.readOnly || controller.selection.length != 1) return null;
+  final e = controller.selected.firstOrNull;
+  return e != null && e.isSized ? e : null;
+}
+
+/// The frame drawn around a selected element.
+Rect _frame(BoardElement e, double scale) => e.bounds.inflate(4 / scale);
+
+/// Top left, top right, bottom right, bottom left.
+List<Offset> _corners(Rect r) => [r.topLeft, r.topRight, r.bottomRight, r.bottomLeft];
 
 class _TextEditing {
   _TextEditing(this.element, {required this.isNew})
@@ -81,6 +103,7 @@ class _BoardViewState extends State<BoardView> {
   final _focus = FocusNode();
   final _touches = <int, Offset>{};
   final _labels = <String, TextPainter>{};
+  final _hoveredCorner = ValueNotifier<int?>(null);
   _Gesture? _gesture;
   int? _gesturePointer;
   var _pinching = false;
@@ -140,6 +163,7 @@ class _BoardViewState extends State<BoardView> {
     _scene.dispose();
     _interaction.dispose();
     _focus.dispose();
+    _hoveredCorner.dispose();
     for (final label in _labels.values) {
       label.dispose();
     }
@@ -203,7 +227,7 @@ class _BoardViewState extends State<BoardView> {
               fit: StackFit.expand,
               children: [
                 ListenableBuilder(
-                  listenable: controller,
+                  listenable: Listenable.merge([controller, _hoveredCorner]),
                   builder: (context, child) => MouseRegion(
                     cursor: _cursor(),
                     onExit: (_) => session.moveCursor(null),
@@ -212,7 +236,7 @@ class _BoardViewState extends State<BoardView> {
                   child: Listener(
                     onPointerDown: _down,
                     onPointerMove: _move,
-                    onPointerHover: (e) => session.moveCursor(controller.toWorld(e.localPosition)),
+                    onPointerHover: _hover,
                     onPointerUp: _up,
                     onPointerCancel: (e) => _up(e, cancelled: true),
                     onPointerSignal: _signal,
@@ -263,6 +287,14 @@ class _BoardViewState extends State<BoardView> {
 
   MouseCursor _cursor() {
     if (_space) return SystemMouseCursors.grab;
+    if (controller.tool == BoardTool.select && _resizable(controller) != null) {
+      switch (_hoveredCorner.value) {
+        case 0 || 2:
+          return SystemMouseCursors.resizeUpLeftDownRight;
+        case 1 || 3:
+          return SystemMouseCursors.resizeUpRightDownLeft;
+      }
+    }
     return switch (controller.tool) {
       BoardTool.select => SystemMouseCursors.basic,
       BoardTool.hand => SystemMouseCursors.grab,
@@ -372,7 +404,7 @@ class _BoardViewState extends State<BoardView> {
             e.buttons & (kMiddleMouseButton | kSecondaryMouseButton) != 0 ||
         e.kind == PointerDeviceKind.touch && _stylus;
     if (panning) return _Pan(controller);
-    if (controller.tool == BoardTool.select) return _select(world);
+    if (controller.tool == BoardTool.select) return _select(world, e.kind);
     if (session.readOnly) return _Pan(controller);
     if (e.kind == PointerDeviceKind.invertedStylus) return _Eraser(this, world);
     return switch (controller.tool) {
@@ -388,7 +420,9 @@ class _BoardViewState extends State<BoardView> {
     };
   }
 
-  _Gesture _select(Offset world) {
+  _Gesture _select(Offset world, PointerDeviceKind kind) {
+    final corner = _cornerAt(world, kind);
+    if (corner != null) return _Resize(this, _resizable(controller)!, corner, world);
     final hit = hitTop(board.elements, world, tolerance);
     final additive = HardwareKeyboard.instance.isShiftPressed;
     if (hit == null) {
@@ -411,6 +445,24 @@ class _BoardViewState extends State<BoardView> {
       return _Tap(() {});
     }
     return session.readOnly ? _Tap(() {}) : _Move(this, world);
+  }
+
+  /// The corner of the resizable selection under [world], if any.
+  int? _cornerAt(Offset world, PointerDeviceKind kind) {
+    final e = _resizable(controller);
+    if (e == null) return null;
+    final reach = (kind == PointerDeviceKind.touch ? 16 : 8) / controller.scale;
+    final corners = _corners(_frame(e, controller.scale));
+    for (var i = 0; i < corners.length; i++) {
+      if ((corners[i] - world).distance <= reach) return i;
+    }
+    return null;
+  }
+
+  void _hover(PointerHoverEvent e) {
+    final world = controller.toWorld(e.localPosition);
+    session.moveCursor(world);
+    _hoveredCorner.value = controller.tool == BoardTool.select ? _cornerAt(world, e.kind) : null;
   }
 
   void _textAt(Offset world) {
@@ -510,6 +562,7 @@ class _BoardViewState extends State<BoardView> {
       }
       return KeyEventResult.ignored;
     }
+    if (_gesture case final _Stroke stroke when _commandKeys.contains(key)) stroke.show();
     if (key == LogicalKeyboardKey.space) {
       final held = event is! KeyUpEvent;
       if (held != _space) setState(() => _space = held);
@@ -517,8 +570,7 @@ class _BoardViewState extends State<BoardView> {
     }
     if (event is KeyUpEvent) return KeyEventResult.ignored;
     final keyboard = HardwareKeyboard.instance;
-    final command = keyboard.isControlPressed || keyboard.isMetaPressed;
-    if (command) {
+    if (_commandPressed) {
       if (key == LogicalKeyboardKey.keyZ) {
         keyboard.isShiftPressed ? session.redo() : session.undo();
       } else if (key == LogicalKeyboardKey.keyY) {
@@ -552,6 +604,13 @@ class _BoardViewState extends State<BoardView> {
     controller.tool = tool;
     return KeyEventResult.handled;
   }
+
+  static final _commandKeys = {
+    LogicalKeyboardKey.controlLeft,
+    LogicalKeyboardKey.controlRight,
+    LogicalKeyboardKey.metaLeft,
+    LogicalKeyboardKey.metaRight,
+  };
 
   static final _zoomIn = {
     LogicalKeyboardKey.equal,
@@ -619,7 +678,7 @@ class _Stroke implements _Gesture {
     _points[0] = 0;
     _points[1] = 0;
     _last = origin;
-    _show();
+    show();
   }
 
   final _BoardViewState view;
@@ -639,7 +698,7 @@ class _Stroke implements _Gesture {
     }
     _points[_length++] = world.dx - origin.dx;
     _points[_length++] = world.dy - origin.dy;
-    _show();
+    show();
   }
 
   BoardElement _element(Float32List points, int z) {
@@ -653,11 +712,20 @@ class _Stroke implements _Gesture {
       points: points,
       color: highlighter ? controller.color & 0x00FFFFFF | 0x66000000 : controller.color,
       strokeWidth: highlighter ? controller.strokeWidth * 4 : controller.strokeWidth,
+      dash: controller.dash,
     );
   }
 
-  void _show() {
-    final draft = _element(Float32List.sublistView(_points, 0, _length), 0);
+  /// The shape the stroke stands for, while Ctrl is held.
+  BoardElement? _shape(BoardElement stroke) {
+    if (!_commandPressed) return null;
+    final shape = recognizeShape(stroke);
+    return shape != null && shape.canFill ? shape.copyWith(filled: view.controller.filled) : shape;
+  }
+
+  void show() {
+    final stroke = _element(Float32List.sublistView(_points, 0, _length), 0);
+    final draft = _shape(stroke) ?? stroke;
     view._interaction
       ..draft = draft
       ..changed();
@@ -666,11 +734,12 @@ class _Stroke implements _Gesture {
 
   @override
   void end() {
-    final points = simplify(
-      Float32List.sublistView(_points, 0, _length),
-      0.4 / view.controller.scale,
+    final z = view.board.topZ + 1;
+    final drawn = Float32List.sublistView(_points, 0, _length);
+    final shape = _shape(_element(drawn, z));
+    view.session.apply(
+      put: [shape ?? _element(simplify(drawn, 0.4 / view.controller.scale), z)],
     );
-    view.session.apply(put: [_element(points, view.board.topZ + 1)]);
     cancel();
   }
 
@@ -718,6 +787,7 @@ class _Shape implements _Gesture {
         points: Float32List.fromList([0, 0, delta.dx, delta.dy]),
         color: controller.color,
         strokeWidth: controller.strokeWidth,
+        dash: controller.dash,
       );
     }
     if (constrained) {
@@ -736,6 +806,7 @@ class _Shape implements _Gesture {
       color: controller.color,
       strokeWidth: controller.strokeWidth,
       filled: controller.filled,
+      dash: controller.dash,
     );
   }
 
@@ -835,6 +906,64 @@ class _Move implements _Gesture {
     view._interaction
       ..lifted = const {}
       ..shift = Offset.zero
+      ..changed();
+  }
+}
+
+/// Drags one [corner] of [element], the opposite one staying where it is. An
+/// image keeps its proportions, and so does a shape with Shift held.
+class _Resize implements _Gesture {
+  _Resize(this.view, this.element, int corner, this.start)
+    : _corner = _corners(_rect(element))[corner],
+      _anchor = _corners(_rect(element))[(corner + 2) % 4];
+
+  final _BoardViewState view;
+  final BoardElement element;
+  final Offset start;
+  final Offset _corner;
+  final Offset _anchor;
+  BoardElement? _resized;
+
+  static Rect _rect(BoardElement e) => Rect.fromLTWH(e.x, e.y, e.width, e.height);
+
+  @override
+  void move(Offset world, PointerMoveEvent event) {
+    final e = element;
+    final span = _corner + (world - start) - _anchor;
+    final least = 8 / view.controller.scale;
+    var width = math.max(span.dx.abs(), least), height = math.max(span.dy.abs(), least);
+    final proportional = e.kind == ElementKind.image || HardwareKeyboard.instance.isShiftPressed;
+    if (proportional && e.width > 0 && e.height > 0) {
+      final k = math.max(width / e.width, height / e.height);
+      width = e.width * k;
+      height = e.height * k;
+    }
+    final rect = Rect.fromPoints(
+      _anchor,
+      _anchor + Offset(span.dx < 0 ? -width : width, span.dy < 0 ? -height : height),
+    );
+    final resized = _resized = e.copyWith(
+      x: rect.left,
+      y: rect.top,
+      width: rect.width,
+      height: rect.height,
+    );
+    view._interaction
+      ..resized = resized
+      ..changed();
+  }
+
+  @override
+  void end() {
+    final resized = _resized;
+    if (resized != null) view.session.apply(put: [resized]);
+    cancel();
+  }
+
+  @override
+  void cancel() {
+    view._interaction
+      ..resized = null
       ..changed();
   }
 }
@@ -975,6 +1104,8 @@ class _OverlayPainter extends CustomPainter {
       final e = board[id];
       if (e != null) paintElement(canvas, e.translated(interaction.shift), images: scene.images);
     }
+    final resized = interaction.resized;
+    if (resized != null) paintElement(canvas, resized, images: scene.images);
     for (final peer in session.peers) {
       final draft = peer.draft;
       if (draft != null) paintElement(canvas, draft);
@@ -988,7 +1119,18 @@ class _OverlayPainter extends CustomPainter {
       ..strokeWidth = 1.5 / scale;
     final shift = interaction.lifted.isEmpty ? Offset.zero : interaction.shift;
     for (final e in controller.selected) {
-      canvas.drawRect(e.bounds.shift(shift).inflate(4 / scale), line);
+      canvas.drawRect(_frame(e.id == resized?.id ? resized! : e, scale).shift(shift), line);
+    }
+    final resizable = _resizable(controller);
+    if (resizable != null) {
+      final frame = _frame(resizable.id == resized?.id ? resized! : resizable, scale);
+      final fill = Paint()..color = const Color(0xFFFFFFFF);
+      for (final corner in _corners(frame.shift(shift))) {
+        final handle = Rect.fromCenter(center: corner, width: 8 / scale, height: 8 / scale);
+        canvas
+          ..drawRect(handle, fill)
+          ..drawRect(handle, line);
+      }
     }
     final marquee = interaction.marquee;
     if (marquee != null) {

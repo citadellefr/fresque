@@ -55,7 +55,7 @@ bool hits(BoardElement e, Offset p, double tolerance) {
   switch (e.kind) {
     case ElementKind.text || ElementKind.image:
       return true;
-    case ElementKind.stroke || ElementKind.line || ElementKind.arrow:
+    case ElementKind.stroke || ElementKind.line || ElementKind.arrow || ElementKind.polygon:
       final pts = e.points;
       final x = p.dx - e.x, y = p.dy - e.y;
       if (pts.length == 2) return math.sqrt(_sq(x - pts[0]) + _sq(y - pts[1])) <= reach;
@@ -64,7 +64,10 @@ bool hits(BoardElement e, Offset p, double tolerance) {
           return true;
         }
       }
-      return false;
+      if (e.kind != ElementKind.polygon || pts.length < 4) return false;
+      final last = pts.length - 2;
+      return _segmentDistance(x, y, pts[last], pts[last + 1], pts[0], pts[1]) <= reach ||
+          e.filled && _inside(pts, x, y);
     case ElementKind.rectangle:
       final rect = Rect.fromLTWH(e.x, e.y, e.width, e.height);
       if (e.filled && rect.contains(p)) return true;
@@ -88,6 +91,16 @@ BoardElement? hitTop(List<BoardElement> bottomToTop, Offset p, double tolerance)
 }
 
 double _sq(double v) => v * v;
+
+/// Whether ([x], [y]) lies inside the polygon [pts], by the even-odd rule.
+bool _inside(Float32List pts, double x, double y) {
+  var inside = false;
+  for (var i = 0, j = pts.length - 2; i + 1 < pts.length; j = i, i += 2) {
+    final xi = pts[i], yi = pts[i + 1], xj = pts[j], yj = pts[j + 1];
+    if ((yi > y) != (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
 
 double _segmentDistance(double px, double py, double ax, double ay, double bx, double by) {
   final dx = bx - ax, dy = by - ay;

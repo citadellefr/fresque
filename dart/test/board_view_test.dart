@@ -81,6 +81,57 @@ void main() {
     expect(controller.selection, {before.id});
   });
 
+  boardTest('a stroke drawn with Ctrl held becomes the shape it stands for', (tester) async {
+    await mount(tester);
+    controller.dash = BoardDash.dashed;
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    final gesture = await tester.startGesture(const Offset(100, 100));
+    for (final corner in const [Offset(300, 100), Offset(300, 200), Offset(100, 200)]) {
+      await gesture.moveTo(corner);
+      await tester.pump();
+    }
+    await gesture.moveTo(const Offset(100, 102));
+    await gesture.up();
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+
+    final shape = session.board.elements.single;
+    expect(shape.kind, ElementKind.rectangle);
+    expect(shape.width, closeTo(200 / controller.scale, 4));
+    expect(shape.height, closeTo(100 / controller.scale, 4));
+    expect(shape.dash, BoardDash.dashed);
+  });
+
+  boardTest('dragging a corner of a selected image resizes it in proportion', (tester) async {
+    await mount(tester);
+    final image = BoardElement(
+      id: 'i',
+      kind: ElementKind.image,
+      z: 1,
+      x: 100,
+      y: 100,
+      width: 100,
+      height: 50,
+      color: 0xFF000000,
+      src: 'data:image/png;base64,AAAA',
+    );
+    session.apply(put: [image]);
+    controller
+      ..tool = BoardTool.select
+      ..select(['i']);
+    await tester.pump();
+
+    final corner = controller.toScreen(const Offset(200, 150)) + const Offset(4, 4);
+    await tester.dragFrom(corner, const Offset(100, 0));
+    await tester.pump();
+    final resized = session.board['i']!;
+    expect(resized.x, 100);
+    expect(resized.y, 100);
+    expect(resized.width, closeTo(200, 1));
+    expect(resized.height, closeTo(100, 1));
+    expect(controller.selection, {'i'});
+  });
+
   boardTest('the text tool writes a text', (tester) async {
     await mount(tester);
     controller.tool = BoardTool.text;

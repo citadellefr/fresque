@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fresque/fresque.dart';
+import 'package:image/image.dart' as img;
 
 import 'fakes.dart';
 
@@ -16,6 +17,36 @@ void main() {
   }
 
   int pages(String pdf) => RegExp(r'/Type /Page ').allMatches(pdf).length;
+
+  /// How many separate marks a horizontal line leaves along its middle.
+  Future<int> marks(BoardDash dash) async {
+    final line = BoardElement(
+      id: 'l',
+      kind: ElementKind.line,
+      z: 0,
+      x: 0,
+      y: 0,
+      points: Float32List.fromList([0, 0, 200, 0]),
+      color: 0xFF000000,
+      strokeWidth: 4,
+      dash: dash,
+    );
+    final png = await exportPng(Board()..reset([line], 0), pixelRatio: 1, margin: 8);
+    final image = img.decodePng(png!)!;
+    var count = 0, inked = false;
+    for (var x = 0; x < image.width; x++) {
+      final dark = image.getPixel(x, image.height ~/ 2).r < 128;
+      if (dark && !inked) count++;
+      inked = dark;
+    }
+    return count;
+  }
+
+  test('lines are drawn solid, dashed or dotted', () async {
+    expect(await marks(BoardDash.solid), 1);
+    expect(await marks(BoardDash.dashed), inInclusiveRange(5, 9));
+    expect(await marks(BoardDash.dotted), inInclusiveRange(15, 25));
+  });
 
   test('an empty board has no PDF', () async {
     expect(await exportPdf(Board()), isNull);

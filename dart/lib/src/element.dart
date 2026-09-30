@@ -9,6 +9,7 @@ enum ElementKind {
   arrow('a'),
   rectangle('r'),
   ellipse('e'),
+  polygon('g'),
   text('t'),
   image('i');
 
@@ -24,11 +25,25 @@ enum ElementKind {
   }
 }
 
+/// How the outline of a path or a shape is drawn.
+enum BoardDash {
+  solid,
+  dashed,
+  dotted;
+
+  static BoardDash fromCode(Object? code) => switch (code) {
+    1 => dashed,
+    2 => dotted,
+    _ => solid,
+  };
+}
+
 /// One thing drawn on a board. Immutable: an edit is a new element with the
 /// same [id].
 ///
-/// Strokes, lines and arrows hold their [points] as `x0, y0, x1, y1, …`
-/// relative to ([x], [y]), so moving one only changes its origin. Shapes,
+/// Strokes, lines, arrows and polygons hold their [points] as
+/// `x0, y0, x1, y1, …` relative to ([x], [y]), so moving one only changes its
+/// origin; a polygon joins its last point back to its first. Shapes,
 /// texts and images span [width] × [height] from their origin. An image
 /// carries its picture in [src], a data URL.
 @immutable
@@ -45,6 +60,7 @@ class BoardElement {
     Float32List? points,
     this.strokeWidth = 2,
     this.filled = false,
+    this.dash = BoardDash.solid,
     this.text = '',
     this.fontSize = 20,
     this.src = '',
@@ -63,6 +79,7 @@ class BoardElement {
   final int color;
   final double strokeWidth;
   final bool filled;
+  final BoardDash dash;
   final String text;
   final double fontSize;
   final String src;
@@ -70,7 +87,17 @@ class BoardElement {
   late final Rect bounds = _bounds();
 
   bool get isPath =>
-      kind == ElementKind.stroke || kind == ElementKind.line || kind == ElementKind.arrow;
+      kind == ElementKind.stroke ||
+      kind == ElementKind.line ||
+      kind == ElementKind.arrow ||
+      kind == ElementKind.polygon;
+
+  /// Whether [width] and [height] give its size, which can then be changed.
+  bool get isSized =>
+      kind == ElementKind.rectangle || kind == ElementKind.ellipse || kind == ElementKind.image;
+
+  bool get canFill =>
+      kind == ElementKind.rectangle || kind == ElementKind.ellipse || kind == ElementKind.polygon;
 
   BoardElement copyWith({
     int? z,
@@ -82,6 +109,7 @@ class BoardElement {
     int? color,
     double? strokeWidth,
     bool? filled,
+    BoardDash? dash,
     String? text,
     double? fontSize,
   }) => BoardElement(
@@ -96,6 +124,7 @@ class BoardElement {
     color: color ?? this.color,
     strokeWidth: strokeWidth ?? this.strokeWidth,
     filled: filled ?? this.filled,
+    dash: dash ?? this.dash,
     text: text ?? this.text,
     fontSize: fontSize ?? this.fontSize,
     src: src,
@@ -137,6 +166,7 @@ class BoardElement {
     'c': color,
     'sw': _num(strokeWidth),
     if (filled) 'f': 1,
+    if (dash != BoardDash.solid) 'd': dash.index,
     if (kind == ElementKind.text) ...{'tx': text, 'fs': _num(fontSize)},
     if (kind == ElementKind.image) 'src': src,
   };
@@ -160,6 +190,7 @@ class BoardElement {
       color: _int(json['c'], 0xFF000000),
       strokeWidth: _double(json['sw'], 2),
       filled: json['f'] == 1 || json['f'] == true,
+      dash: BoardDash.fromCode(json['d']),
       text: json['tx'] is String ? json['tx']! as String : '',
       fontSize: _double(json['fs'], 20),
       src: json['src'] is String ? json['src']! as String : '',

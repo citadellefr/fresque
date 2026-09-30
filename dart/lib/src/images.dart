@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:image/image.dart' as img;
 
 import 'element.dart';
@@ -15,22 +16,32 @@ const maxImageBytes = 180 << 10;
 /// Longest side of a prepared image, in pixels.
 const maxImageSide = 1600;
 
-/// An image file made ready for a board: [src] is its data URL, [size] its
-/// size in pixels.
+/// An image file made ready for a board: [src] is its data URL, [size] the
+/// size it is drawn at.
 typedef PreparedImage = ({String src, ui.Size size});
 
 /// Keeps [bytes] as they are when they are small enough, and otherwise scales
 /// the image down and encodes it again: as JPEG, or as PNG when it has
-/// transparency. Throws a [FormatException] when [bytes] are not an image.
+/// transparency. An SVG is drawn at its own size, from a picture rendered
+/// [maxImageSide] pixels long so that it stays sharp when enlarged. Throws a
+/// [FormatException] when [bytes] are not an image.
 Future<PreparedImage> prepareImage(Uint8List bytes, {int maxBytes = maxImageBytes}) async {
+  final svg = _isSvg(bytes);
   final ui.Image image;
+  ui.Size? drawn;
   try {
-    image = await _decode(bytes);
+    if (svg) {
+      final picture = await vg.loadPicture(SvgBytesLoader(bytes), null);
+      drawn = picture.size;
+      image = await _rasterize(picture);
+    } else {
+      image = await _decode(bytes);
+    }
   } on Object {
     throw const FormatException('Not an image');
   }
   try {
-    final mime = _mime(bytes);
+    final mime = svg ? null : _mime(bytes);
     var side = math.max(image.width, image.height);
     if (mime != null && bytes.length <= maxBytes && side <= maxImageSide) {
       return (
@@ -41,13 +52,43 @@ Future<PreparedImage> prepareImage(Uint8List bytes, {int maxBytes = maxImageByte
     side = math.min(side, maxImageSide);
     while (side >= 16) {
       final (:mime, :bytes, :size) = await _encode(image, side);
-      if (bytes.length <= maxBytes) return (src: _dataUrl(mime, bytes), size: size);
+      if (bytes.length <= maxBytes) return (src: _dataUrl(mime, bytes), size: drawn ?? size);
       // the weight follows the area: aim just under the budget
       side = (side * math.min(0.9, 0.95 * math.sqrt(maxBytes / bytes.length))).floor();
     }
     throw const FormatException('Image too large');
   } finally {
     image.dispose();
+  }
+}
+
+/// Whether [bytes] hold SVG markup: text opening on a tag, an `<svg` one
+/// among the first.
+bool _isSvg(Uint8List bytes) {
+  final head = utf8.decode(bytes.take(1024).toList(), allowMalformed: true).trimLeft();
+  return head.startsWith('<') && head.contains('<svg');
+}
+
+Future<ui.Image> _rasterize(PictureInfo svg) async {
+  try {
+    final size = svg.size;
+    if (size.isEmpty) throw const FormatException('Empty SVG');
+    final k = maxImageSide / size.longestSide;
+    final recorder = ui.PictureRecorder();
+    ui.Canvas(recorder)
+      ..scale(k)
+      ..drawPicture(svg.picture);
+    final picture = recorder.endRecording();
+    try {
+      return await picture.toImage(
+        math.max(1, (size.width * k).round()),
+        math.max(1, (size.height * k).round()),
+      );
+    } finally {
+      picture.dispose();
+    }
+  } finally {
+    svg.picture.dispose();
   }
 }
 
