@@ -1,8 +1,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:archive/archive.dart';
-
 /// A PDF whose pages are each covered by one opaque picture, kept lossless.
 class PdfPictures {
   PdfPictures() {
@@ -19,14 +17,14 @@ class PdfPictures {
   int get pageCount => _kids.length;
 
   /// Adds a page of [width] by [height] points, covered by a picture of
-  /// [columns] by [rows] pixels whose [rgb] holds three bytes each, row by row
-  /// from the top.
-  void addPage(double width, double height, int columns, int rows, Uint8List rgb) {
+  /// [columns] by [rows] pixels: [deflated] holds three bytes for each, row by
+  /// row from the top, compressed with zlib.
+  void addPage(double width, double height, int columns, int rows, Uint8List deflated) {
     final w = _number(width), h = _number(height);
     final image = _object(
       '<< /Type /XObject /Subtype /Image /Width $columns /Height $rows '
       '/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode',
-      const ZLibEncoder().encodeBytes(rgb),
+      deflated,
     );
     final content = _object('<<', latin1.encode('q $w 0 0 $h 0 0 cm /P Do Q'));
     _kids.add(

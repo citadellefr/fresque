@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.6.0
+
+- Shape correction keeps to simple shapes: a line, an ellipse or a circle, a
+  rectangle or a square, a triangle, or a diamond, its corners set on the
+  middles of its sides. A stroke standing for anything else stays as drawn.
+- Resizing: the corners of any single selected element but a text can be
+  dragged, so polygons, lines, arrows and strokes stretch too. A stroke keeps
+  its proportions like an image. `BoardElement.box` is what an element spans
+  without its stroke width, `BoardElement.fitted` stretches it to another
+  box, and `canResize` replaces `isSized`.
+- Copy and paste: `BoardController.copySelection`, `cutSelection` and
+  `paste`, Ctrl+C, Ctrl+X and Ctrl+V in the view. Pasting puts the copy on top,
+  under the mouse, selected. What is copied is shared by every board of the
+  app.
+- `exportPdf` no longer freezes the app: each page is drawn in bands, waiting
+  between them, and compressed in another isolate, or by the browser on the
+  web. `onProgress` tells how many pages are done. Pages are capped at
+  300 dpi.
+- `exportPdf` lays out drawings rather than shapes: elements less than an
+  inch apart stay together, and so does what lies near a drawing compared
+  with its size, so that a stroke beside a drawing, or two drawings side by
+  side, are no longer parted. Drawings that fit together on A4 share a page,
+  and pages come row by row, each row from the left.
+- No longer depends on `archive`.
+
+## 0.5.0
+
+- Shape correction: a pen or highlighter stroke drawn with Ctrl (or ⌘) held
+  becomes the shape it stands for, shown as such while drawing: a straight
+  line, levelled when nearly so, an ellipse or a circle, a rectangle or a
+  square, or a polygon of up to eight sides. `recognizeShape` is not exported:
+  the view does it.
+- Polygons: a new kind, `g`, closed and straight-sided, which can be filled.
+  Older clients leave them alone.
+- Dashes: `BoardController.dash` draws lines, strokes and shapes dashed or
+  dotted, stored as `d` and restyling the selection like the other settings.
+- Resizing: the corners of a single selected image, rectangle or ellipse can be
+  dragged. An image keeps its proportions, a shape keeps them with Shift.
+- SVG images: `insertImage` takes SVG files, rendered once to a picture
+  1600 pixels long and drawn at the size the file declares. Adds
+  `flutter_svg`.
+
 ## 0.4.0
 
 - Following: `BoardController.follow` keeps the edits of one peer on screen,

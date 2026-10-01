@@ -83,10 +83,27 @@ void main() {
     expect(shape.x, 10);
   });
 
-  test('a tilted square stays a polygon', () {
-    final shape = recognizeShape(drawn([(50, 0), (100, 50), (50, 100), (0, 50), (50, 0)]))!;
+  test('a tilted square becomes a diamond, its corners on the middles of its box', () {
+    final shape = recognizeShape(drawn([(50, 0), (104, 48), (52, 100), (0, 52), (50, 0)]))!;
     expect(shape.kind, ElementKind.polygon);
+    final box = shape.box;
     expect(shape.points, hasLength(8));
+    for (var i = 0; i < 8; i += 2) {
+      final x = shape.x + shape.points[i], y = shape.y + shape.points[i + 1];
+      bool near(double a, double b) => (a - b).abs() < 1e-3;
+      final onMiddle =
+          near(x, box.center.dx) && (near(y, box.top) || near(y, box.bottom)) ||
+          near(y, box.center.dy) && (near(x, box.left) || near(x, box.right));
+      expect(onMiddle, isTrue);
+    }
+  });
+
+  test('only simple shapes: no pentagon, no slanted quadrilateral', () {
+    expect(
+      recognizeShape(drawn([(50, 0), (100, 38), (80, 100), (20, 100), (0, 38), (50, 0)])),
+      isNull,
+    );
+    expect(recognizeShape(drawn([(0, 0), (160, 30), (200, 120), (30, 100), (0, 0)])), isNull);
   });
 
   test('a straight stroke becomes a line, level when it nearly is', () {

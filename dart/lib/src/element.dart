@@ -84,6 +84,10 @@ class BoardElement {
   final double fontSize;
   final String src;
 
+  /// What its points or its size span, the width of the stroke left out.
+  late final Rect box = _box();
+
+  /// What it covers once drawn.
   late final Rect bounds = _bounds();
 
   bool get isPath =>
@@ -92,14 +96,15 @@ class BoardElement {
       kind == ElementKind.arrow ||
       kind == ElementKind.polygon;
 
-  /// Whether [width] and [height] give its size, which can then be changed.
-  bool get isSized =>
-      kind == ElementKind.rectangle || kind == ElementKind.ellipse || kind == ElementKind.image;
+  /// Whether it can be stretched by its corners: anything but a text or a
+  /// dot.
+  bool get canResize => kind != ElementKind.text && box.longestSide > 0;
 
   bool get canFill =>
       kind == ElementKind.rectangle || kind == ElementKind.ellipse || kind == ElementKind.polygon;
 
   BoardElement copyWith({
+    String? id,
     int? z,
     double? x,
     double? y,
@@ -113,7 +118,7 @@ class BoardElement {
     String? text,
     double? fontSize,
   }) => BoardElement(
-    id: id,
+    id: id ?? this.id,
     kind: kind,
     z: z ?? this.z,
     x: x ?? this.x,
@@ -132,25 +137,40 @@ class BoardElement {
 
   BoardElement translated(Offset delta) => copyWith(x: x + delta.dx, y: y + delta.dy);
 
-  Rect _bounds() {
-    if (isPath) {
-      if (points.isEmpty) return Rect.fromLTWH(x, y, 0, 0);
-      var left = double.infinity, top = double.infinity;
-      var right = double.negativeInfinity, bottom = double.negativeInfinity;
-      for (var i = 0; i + 1 < points.length; i += 2) {
-        left = math.min(left, points[i]);
-        right = math.max(right, points[i]);
-        top = math.min(top, points[i + 1]);
-        bottom = math.max(bottom, points[i + 1]);
-      }
-      final pad = kind == ElementKind.arrow ? arrowHeadLength : strokeWidth / 2;
-      return Rect.fromLTRB(x + left, y + top, x + right, y + bottom).inflate(pad);
+  /// Stretched so that its [box] becomes [to]. A side of no length, that of a
+  /// level line, keeps none.
+  BoardElement fitted(Rect to) {
+    if (!isPath) return copyWith(x: to.left, y: to.top, width: to.width, height: to.height);
+    final from = box;
+    final kx = from.width == 0 ? 0.0 : to.width / from.width;
+    final ky = from.height == 0 ? 0.0 : to.height / from.height;
+    final scaled = Float32List(points.length);
+    for (var i = 0; i + 1 < points.length; i += 2) {
+      scaled[i] = (x + points[i] - from.left) * kx;
+      scaled[i + 1] = (y + points[i + 1] - from.top) * ky;
     }
-    final rect = Rect.fromLTWH(x, y, width, height);
-    return kind == ElementKind.text || kind == ElementKind.image
-        ? rect
-        : rect.inflate(strokeWidth / 2);
+    return copyWith(x: to.left, y: to.top, points: scaled);
   }
+
+  Rect _box() {
+    if (!isPath) return Rect.fromLTWH(x, y, width, height);
+    if (points.isEmpty) return Rect.fromLTWH(x, y, 0, 0);
+    var left = double.infinity, top = double.infinity;
+    var right = double.negativeInfinity, bottom = double.negativeInfinity;
+    for (var i = 0; i + 1 < points.length; i += 2) {
+      left = math.min(left, points[i]);
+      right = math.max(right, points[i]);
+      top = math.min(top, points[i + 1]);
+      bottom = math.max(bottom, points[i + 1]);
+    }
+    return Rect.fromLTRB(x + left, y + top, x + right, y + bottom);
+  }
+
+  Rect _bounds() => switch (kind) {
+    ElementKind.text || ElementKind.image => box,
+    ElementKind.arrow => box.inflate(arrowHeadLength),
+    _ => box.inflate(strokeWidth / 2),
+  };
 
   double get arrowHeadLength => math.max(12, strokeWidth * 4);
 

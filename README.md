@@ -16,10 +16,12 @@ the whiteboards of the Documents app, and is released under the MIT license.
 ## Features
 
 - **Drawing tools**: pen, highlighter, line, arrow, rectangle, ellipse, text,
-  image (SVG included), eraser, selection, move, resize, bring to front and
-  send to back, undo and redo. Any width, solid, dashed or dotted.
-- **Shape correction**: a stroke drawn with Ctrl held becomes the clean line,
-  ellipse, circle, rectangle, square or polygon it stands for.
+  image (SVG included), eraser, selection, move, resize, copy and paste,
+  bring to front and send to back, undo and redo. Any width, solid, dashed or
+  dotted.
+- **Shape correction**: a stroke drawn with Ctrl held becomes the simple
+  shape it stands for: line, circle, ellipse, square, rectangle, triangle or
+  diamond.
 - **Live collaboration**: everyone's cursor, and what they are drawing while
   they draw it. Nobody waits for the server before seeing their own edits.
   Anyone, a read-only viewer included, can follow someone's edits.
@@ -137,8 +139,9 @@ BoardView(controller: controller);
   down and encoded again to stay under the server's default element limit. An
   SVG is rendered once to a sharp picture.
 - `exportPng` renders a board to an image, scaled down past 8192 pixels.
-  `exportPdf` lays it out on A4 pages at full resolution instead, without
-  cutting through shapes.
+  `exportPdf` lays it out on A4 pages instead, one per drawing, never cut,
+  rendered a band at a time so that the app keeps running, and reports its
+  progress.
 
 The connector is called again on every reconnection. It can fetch a fresh,
 short-lived ticket each time.
@@ -149,7 +152,7 @@ short-lived ticket each time.
 | --- | --- |
 | One finger, mouse, stylus | use the current tool |
 | Ctrl + pen or highlighter | draw a clean shape |
-| Corner of a selected shape or image | resize (Shift keeps a shape's proportions) |
+| Corner of a selected shape, stroke or image | resize (Shift keeps a shape's proportions) |
 | Two fingers, trackpad | pan and zoom |
 | Wheel | pan (zoom with Ctrl or ⌘) |
 | `Ctrl` + `+` / `-` / `0` | zoom in, zoom out, 100 % |
@@ -158,6 +161,7 @@ short-lived ticket each time.
 | `V` `H` `P` `M` `L` `A` `R` `O` `T` `E` | select, hand, pen, highlighter, line, arrow, rectangle, ellipse, text, eraser |
 | `Ctrl+Z` / `Ctrl+Shift+Z` or `Ctrl+Y` | undo / redo |
 | `Delete`, `Ctrl+A`, `Esc` | delete selection, select all, deselect |
+| `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | copy, cut, paste under the mouse |
 
 ## Protocol
 

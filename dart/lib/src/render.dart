@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart';
 
 import 'board.dart';
+import 'deflate.dart';
 import 'element.dart';
 import 'images.dart';
 import 'pdf.dart';
@@ -326,45 +327,43 @@ Future<Uint8List?> exportPng(
 /// A4 in board units, at 96 per inch.
 const _a4 = Size(794, 1123);
 
-/// The whole board as a PDF, or null when it is empty. Elements closer than
-/// [margin] form groups that a page never cuts: each page gathers the groups
-/// that fit together on A4 at their real size, turned like them, with [margin]
-/// around. A group too large for A4 gets a page of its own, scaled down to it.
-/// Pages are rendered at [pixelRatio], lowered only past [maxSide] pixels, on
-/// an opaque [background].
+/// Elements closer than this belong to the same drawing.
+const _near = 96.0;
+
+/// Pixels of a page drawn at once: the rest of the app gets the UI thread
+/// back between two bands.
+const _bandPixels = 1 << 18;
+
+typedef _Page = ({List<BoardElement> elements, Rect area});
+
+/// The whole board as a PDF, or null when it is empty. A page shows whole
+/// drawings and never cuts one: elements close to each other stay together,
+/// and so does what lies near a drawing compared with its size. Drawings that
+/// fit together on A4 at their real size share a page; a larger one gets a
+/// page of its own, scaled down to it. Pages come in reading order, turned
+/// like what they show, with [margin] around.
+///
+/// Pages are rendered at [pixelRatio], lowered only past [maxSide] pixels,
+/// 300 dpi on A4, on an opaque [background], and compressed away from the UI
+/// thread. [onProgress] is told how many pages are done, out of how many.
 Future<Uint8List?> exportPdf(
   Board board, {
   double pixelRatio = 2,
   Color background = const Color(0xFFFFFFFF),
   double margin = 32,
-  int maxSide = 8192,
+  int maxSide = 3508,
+  void Function(int done, int total)? onProgress,
 }) async {
   final elements = board.elements;
   if (elements.isEmpty) return null;
-  final groups = [
-    for (final group in _groups(elements, margin))
-      (elements: group, bounds: _bounds(group, margin)),
-  ];
+  final pages = _pages(elements, margin);
+  onProgress?.call(0, pages.length);
   final pdf = PdfPictures();
   final images = DecodedImages();
   try {
     await images.decodeAll(elements);
-    while (groups.isNotEmpty) {
-      final first = groups.reduce((a, b) => _readFirst(a.bounds, b.bounds) ? a : b);
-      groups.remove(first);
-      var area = first.bounds;
-      final drawn = {...first.elements};
-      final center = first.bounds.center;
-      double distance(Rect r) => (r.center - center).distance;
-      final nearest = [...groups]
-        ..sort((a, b) => distance(a.bounds).compareTo(distance(b.bounds)));
-      for (final group in nearest) {
-        final both = area.expandToInclude(group.bounds);
-        if (both.size.shortestSide > _a4.width || both.size.longestSide > _a4.height) continue;
-        area = both;
-        drawn.addAll(group.elements);
-        groups.remove(group);
-      }
+    for (final (i, page) in pages.indexed) {
+      final area = page.area;
       final paper = area.width > area.height ? _a4.flipped : _a4;
       final grow = math.max(1.0, math.max(area.width / paper.width, area.height / paper.height));
       final rect = Rect.fromCenter(
@@ -373,14 +372,10 @@ Future<Uint8List?> exportPdf(
         height: paper.height * grow,
       );
       final scale = math.min(pixelRatio, maxSide / rect.longestSide);
-      final image = await _render(elements.where(drawn.contains), images, rect, scale, background);
-      try {
-        final rgb = await _rgb(image, background);
-        if (rgb == null) continue;
-        pdf.addPage(paper.width * 0.75, paper.height * 0.75, image.width, image.height, rgb);
-      } finally {
-        image.dispose();
-      }
+      final (:width, :height, :rgb) = await _rgb(page.elements, images, rect, scale, background);
+      final deflated = await deflate(rgb);
+      pdf.addPage(paper.width * 0.75, paper.height * 0.75, width, height, deflated);
+      onProgress?.call(i + 1, pages.length);
     }
   } finally {
     images.dispose();
@@ -388,10 +383,45 @@ Future<Uint8List?> exportPdf(
   return pdf.close();
 }
 
-/// [elements] in groups linked by bounds less than [gap] apart.
+/// [elements] gathered into pages, in reading order: rows from the top, each
+/// from the left.
+List<_Page> _pages(List<BoardElement> elements, double margin) {
+  final drawings = [
+    for (final group in _groups(elements, _near)) (elements: group, area: _bounds(group, margin)),
+  ];
+  for (var merged = true; merged;) {
+    merged = false;
+    for (var i = 0; i < drawings.length; i++) {
+      for (var j = i + 1; j < drawings.length; j++) {
+        final a = drawings[i].area, b = drawings[j].area;
+        final both = a.expandToInclude(b);
+        final near = _gap(a, b) < 0.5 * math.max(a.longestSide, b.longestSide);
+        if (!near && !_fitsA4(both)) continue;
+        final elements = [...drawings[i].elements, ...drawings.removeAt(j).elements];
+        drawings[i] = (elements: elements..sort(compareElements), area: both);
+        j = i;
+        merged = true;
+      }
+    }
+  }
+  drawings.sort((a, b) => a.area.top.compareTo(b.area.top));
+  final rows = <List<_Page>>[];
+  var bottom = double.negativeInfinity;
+  for (final drawing in drawings) {
+    if (drawing.area.center.dy > bottom) rows.add([]);
+    bottom = math.max(bottom, drawing.area.bottom);
+    rows.last.add(drawing);
+  }
+  return [for (final row in rows) ...row..sort((a, b) => a.area.left.compareTo(b.area.left))];
+}
+
+/// [elements] in groups linked by bounds less than [gap] apart, each in
+/// stacking order.
 List<List<BoardElement>> _groups(List<BoardElement> elements, double gap) {
-  final sorted = [...elements]..sort((a, b) => a.bounds.left.compareTo(b.bounds.left));
-  final parent = List.generate(sorted.length, (i) => i);
+  final bounds = [for (final e in elements) e.bounds];
+  final order = List.generate(elements.length, (i) => i)
+    ..sort((a, b) => bounds[a].left.compareTo(bounds[b].left));
+  final parent = List.generate(elements.length, (i) => i);
   int root(int i) {
     while (parent[i] != i) {
       i = parent[i] = parent[parent[i]];
@@ -399,20 +429,27 @@ List<List<BoardElement>> _groups(List<BoardElement> elements, double gap) {
     return i;
   }
 
-  for (var i = 0; i < sorted.length; i++) {
-    final near = sorted[i].bounds.inflate(gap);
-    for (var j = i + 1; j < sorted.length && sorted[j].bounds.left < near.right; j++) {
-      if (sorted[j].bounds.overlaps(near)) parent[root(j)] = root(i);
+  for (var i = 0; i < order.length; i++) {
+    final near = bounds[order[i]].inflate(gap);
+    for (var j = i + 1; j < order.length && bounds[order[j]].left < near.right; j++) {
+      if (bounds[order[j]].overlaps(near)) parent[root(order[j])] = root(order[i]);
     }
   }
   final groups = <int, List<BoardElement>>{};
-  for (var i = 0; i < sorted.length; i++) {
-    (groups[root(i)] ??= []).add(sorted[i]);
+  for (var i = 0; i < elements.length; i++) {
+    (groups[root(i)] ??= []).add(elements[i]);
   }
   return groups.values.toList();
 }
 
-bool _readFirst(Rect a, Rect b) => a.top < b.top || a.top == b.top && a.left <= b.left;
+/// How far apart [a] and [b] are, along the axis they are farthest on;
+/// negative when they overlap.
+double _gap(Rect a, Rect b) => math.max(
+  math.max(a.left, b.left) - math.min(a.right, b.right),
+  math.max(a.top, b.top) - math.min(a.bottom, b.bottom),
+);
+
+bool _fitsA4(Rect r) => r.shortestSide <= _a4.width && r.longestSide <= _a4.height;
 
 Rect _bounds(List<BoardElement> elements, double margin) =>
     elements.map((e) => e.bounds).reduce((a, b) => a.expandToInclude(b)).inflate(margin);
@@ -441,20 +478,53 @@ Future<ui.Image> _render(
   return image;
 }
 
-/// The pixels of [image] without their alpha, or null when all of them are
-/// [background].
-Future<Uint8List?> _rgb(ui.Image image, Color background) async {
-  final data = (await image.toByteData())!;
-  final rgba = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
-  final rgb = Uint8List(rgba.length ~/ 4 * 3);
-  final r = (background.r * 255).round(), g = (background.g * 255).round();
-  final b = (background.b * 255).round();
-  var blank = true;
-  for (var i = 0, j = 0; i < rgba.length; i += 4, j += 3) {
+/// [rect] of [elements] drawn at [scale] on [background], as three bytes per
+/// pixel, row by row from the top. It is drawn in bands, each with only the
+/// elements it crosses, waiting between them so that the app keeps drawing its
+/// frames.
+Future<({int width, int height, Uint8List rgb})> _rgb(
+  List<BoardElement> elements,
+  DecodedImages images,
+  Rect rect,
+  double scale,
+  Color background,
+) async {
+  final width = math.max(1, (rect.width * scale).ceil());
+  final height = math.max(1, (rect.height * scale).ceil());
+  final rgb = Uint8List(width * height * 3);
+  final band = math.max(1, _bandPixels ~/ width);
+  for (var top = 0; top < height; top += band) {
+    await Future<void>.delayed(Duration.zero);
+    final rows = math.min(band, height - top);
+    final area = Rect.fromLTWH(rect.left, rect.top + top / scale, rect.width, rows / scale);
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder)
+      ..scale(scale)
+      ..translate(-rect.left, -rect.top - top / scale)
+      ..drawRect(area, Paint()..color = background);
+    for (final e in elements) {
+      if (e.bounds.overlaps(area)) paintElement(canvas, e, images: images);
+    }
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(width, rows);
+    picture.dispose();
+    try {
+      final data = (await image.toByteData())!;
+      _dropAlpha(data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes), rgb, top * width);
+    } finally {
+      image.dispose();
+    }
+  }
+  return (width: width, height: height, rgb: rgb);
+}
+
+/// Copies the pixels of [rgba] into [rgb] from pixel [at], without their
+/// alpha. Kept out of async code, which makes such a loop many times slower
+/// on the web.
+void _dropAlpha(Uint8List rgba, Uint8List rgb, int at) {
+  for (var i = 0, j = at * 3; i < rgba.length; i += 4, j += 3) {
     rgb[j] = rgba[i];
     rgb[j + 1] = rgba[i + 1];
     rgb[j + 2] = rgba[i + 2];
-    blank = blank && rgba[i] == r && rgba[i + 1] == g && rgba[i + 2] == b;
   }
-  return blank ? null : rgb;
 }

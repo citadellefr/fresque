@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -130,6 +132,61 @@ void main() {
     expect(resized.width, closeTo(200, 1));
     expect(resized.height, closeTo(100, 1));
     expect(controller.selection, {'i'});
+  });
+
+  boardTest('dragging a corner of a selected triangle stretches it', (tester) async {
+    await mount(tester);
+    final triangle = BoardElement(
+      id: 't',
+      kind: ElementKind.polygon,
+      z: 1,
+      x: 100,
+      y: 100,
+      points: Float32List.fromList([50, 0, 100, 100, 0, 100]),
+      color: 0xFF000000,
+    );
+    session.apply(put: [triangle]);
+    controller
+      ..tool = BoardTool.select
+      ..select(['t']);
+    await tester.pump();
+
+    final corner = controller.toScreen(const Offset(200, 200)) + const Offset(4, 4);
+    await tester.dragFrom(corner, Offset(100 * controller.scale, 0));
+    await tester.pump();
+    final stretched = session.board['t']!;
+    expect(stretched.box.left, closeTo(100, 1e-3));
+    expect(stretched.box.top, closeTo(100, 1e-3));
+    expect(stretched.box.width, closeTo(200, 1));
+    expect(stretched.box.height, closeTo(100, 1));
+    expect(stretched.points[0], closeTo(100, 1));
+  });
+
+  boardTest('Ctrl with C and V pastes a copy under the mouse, selected', (tester) async {
+    await mount(tester);
+    session.apply(put: [rect('a', z: 3)]);
+    controller
+      ..tool = BoardTool.select
+      ..select(['a']);
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(const Offset(300, 250));
+    await tester.pump();
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyC);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyV);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+
+    expect(session.board.elements, hasLength(2));
+    final copy = session.board.elements.last;
+    expect(copy.id, isNot('a'));
+    expect(copy.z, greaterThan(3));
+    expect(copy.kind, ElementKind.rectangle);
+    expect(copy.bounds.center, offsetMoreOrLessEquals(controller.toWorld(const Offset(300, 250))));
+    expect(controller.selection, {copy.id});
+    await mouse.removePointer();
   });
 
   boardTest('the text tool writes a text', (tester) async {

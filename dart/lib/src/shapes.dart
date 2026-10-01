@@ -5,10 +5,10 @@ import 'dart:ui';
 import 'element.dart';
 import 'geometry.dart';
 
-/// The clean shape a hand-drawn [stroke] stands for: a straight line, an
-/// ellipse or a circle, a rectangle or a square, or a polygon of up to eight
-/// sides. It keeps the id, place in the stack and style of [stroke]. Null
-/// when the stroke looks like none of them.
+/// The simple shape a hand-drawn [stroke] stands for: a straight line, an
+/// ellipse or a circle, a rectangle or a square, a triangle or a diamond. It
+/// keeps the id, place in the stack and style of [stroke]. Null when the
+/// stroke looks like none of them.
 BoardElement? recognizeShape(BoardElement stroke) {
   final points = _resample(stroke.points, 64);
   if (points == null) return null;
@@ -89,8 +89,16 @@ BoardElement? _polygon(BoardElement stroke, List<Offset> points, Rect bounds) {
       }
     }
   }
-  if (corners.length < 3 || corners.length > 8) return null;
-  if (corners.length == 4 && _upright(corners)) return _rectangle(stroke, _boundsOf(corners));
+  if (corners.length == 4) {
+    final box = _boundsOf(corners);
+    if (_upright(corners)) return _rectangle(stroke, box);
+    if (!_diamond(corners, box)) return null;
+    corners
+      ..clear()
+      ..addAll([box.topCenter, box.centerRight, box.bottomCenter, box.centerLeft]);
+  } else if (corners.length != 3) {
+    return null;
+  }
   return _element(
     stroke,
     ElementKind.polygon,
@@ -108,6 +116,14 @@ bool _upright(List<Offset> corners) {
     if (math.min(off, math.pi / 2 - off) > math.pi / 12) return false;
   }
   return true;
+}
+
+/// Whether each corner lies near the middle of a side of [box].
+bool _diamond(List<Offset> corners, Rect box) {
+  final middles = [box.topCenter, box.centerRight, box.bottomCenter, box.centerLeft];
+  return middles.every(
+    (m) => corners.any((c) => (c - m).distance < 0.15 * box.longestSide),
+  );
 }
 
 BoardElement _rectangle(BoardElement stroke, Rect rect) {

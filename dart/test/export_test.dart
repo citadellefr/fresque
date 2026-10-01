@@ -1,7 +1,7 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fresque/fresque.dart';
 import 'package:image/image.dart' as img;
@@ -78,6 +78,58 @@ void main() {
     expect(pages(pdf), 1);
   });
 
+  BoardElement box(String id, double x, double y, double width, double height) => BoardElement(
+    id: id,
+    kind: ElementKind.rectangle,
+    z: 1,
+    x: x,
+    y: y,
+    width: width,
+    height: height,
+    color: 0xFF000000,
+  );
+
+  test('a stroke near a large drawing shares its page', () async {
+    final pdf = await pdfOf([
+      box('drawing', 0, 0, 1500, 800),
+      BoardElement(
+        id: 'stroke',
+        kind: ElementKind.line,
+        z: 2,
+        x: 1700,
+        y: 400,
+        points: Float32List.fromList([0, 0, 40, 0]),
+        color: 0xFF000000,
+      ),
+    ]);
+    expect(pages(pdf), 1);
+  });
+
+  test('drawings side by side stay together, however large', () async {
+    final pdf = await pdfOf([box('a', 0, 0, 1000, 600), box('b', 1300, 0, 1000, 600)]);
+    expect(pages(pdf), 1);
+  });
+
+  test('pages come row by row, each row from the left', () async {
+    final pdf = await pdfOf([
+      box('tall, right, higher', 5000, 0, 300, 600),
+      box('wide, left', 0, 100, 600, 300),
+      box('below', 2500, 4000, 300, 600),
+    ]);
+    final boxes = RegExp(r'/MediaBox \[0 0 ([\d.]+) ').allMatches(pdf).map((m) => m.group(1));
+    expect(boxes, ['842.25', '595.50', '595.50']);
+  });
+
+  test('progress is told page by page', () async {
+    final steps = <(int, int)>[];
+    await exportPdf(
+      Board()..reset([rect('a'), rect('b', x: 5000)], 0),
+      pixelRatio: 1,
+      onProgress: (done, total) => steps.add((done, total)),
+    );
+    expect(steps, [(0, 2), (1, 2), (2, 2)]);
+  });
+
   test('a group larger than a page is scaled onto one, at full resolution', () async {
     final big = BoardElement(
       id: 'big',
@@ -113,9 +165,8 @@ void main() {
     final header = RegExp(r'/Width (\d+) /Height (\d+) .*?/Length (\d+) >>\nstream\n');
     final m = header.firstMatch(pdf)!;
     final length = int.parse(m.group(3)!);
-    final rgb = const ZLibDecoder().decodeBytes(
-      latin1.encode(pdf.substring(m.end, m.end + length)),
-    );
+    final deflated = latin1.encode(pdf.substring(m.end, m.end + length));
+    final rgb = Uint8List.fromList(zlib.decode(deflated));
     final width = int.parse(m.group(1)!), height = int.parse(m.group(2)!);
     expect(rgb.length, width * height * 3);
     expect(rgb.sublist(0, 3), [255, 255, 255]);

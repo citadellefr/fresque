@@ -20,6 +20,9 @@ class BoardController extends ChangeNotifier {
   static const minScale = 0.1;
   static const maxScale = 8.0;
 
+  /// What was last copied, shared by every board of the app.
+  static var _clipboard = const <BoardElement>[];
+
   final BoardSession session;
 
   BoardTool _tool;
@@ -91,6 +94,8 @@ class BoardController extends ChangeNotifier {
   /// Selected elements that still exist.
   List<BoardElement> get selected => [for (final id in _selection) ?session.board[id]];
 
+  bool get canPaste => _clipboard.isNotEmpty;
+
   void select(Iterable<String> ids) {
     _selection = Set.unmodifiable(ids);
     notifyListeners();
@@ -131,6 +136,34 @@ class BoardController extends ChangeNotifier {
   void deleteSelection() {
     session.apply(delete: _selection);
     select(const []);
+  }
+
+  void copySelection() {
+    final elements = selected;
+    if (elements.isEmpty) return;
+    _clipboard = List.unmodifiable(elements..sort(compareElements));
+    notifyListeners();
+  }
+
+  void cutSelection() {
+    copySelection();
+    deleteSelection();
+  }
+
+  /// Puts a copy of what was copied on top of the board, centred on [at],
+  /// and selects it.
+  void paste(Offset at) {
+    if (_clipboard.isEmpty || session.readOnly) return;
+    final bounds = _clipboard.map((e) => e.bounds).reduce((a, b) => a.expandToInclude(b));
+    final shift = at - bounds.center;
+    var z = session.board.topZ;
+    final copies = [
+      for (final e in _clipboard)
+        e.copyWith(id: randomId(), z: ++z, x: e.x + shift.dx, y: e.y + shift.dy),
+    ];
+    session.apply(put: copies);
+    _tool = BoardTool.select;
+    select([for (final e in copies) e.id]);
   }
 
   void bringToFront() => _restack(front: true);

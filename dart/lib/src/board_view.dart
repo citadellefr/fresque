@@ -21,8 +21,9 @@ import 'shapes.dart';
 /// pan and zoom, the wheel pans (zooms with Ctrl), the middle button or Space
 /// pans, Ctrl with `+`, `-` or `0` zooms. Once a stylus has been seen, fingers
 /// only pan, and its eraser end erases. Drawing with Ctrl held turns the
-/// stroke into the shape it stands for, and the corners of a selected shape or
-/// image resize it.
+/// stroke into the simple shape it stands for, and the corners of a selected
+/// shape, path or image resize it. Ctrl with `C`, `X` and `V` copies, cuts
+/// and pastes the selection.
 class BoardView extends StatefulWidget {
   const BoardView({required this.controller, this.accentColor, this.gridColor, super.key});
 
@@ -69,11 +70,12 @@ bool get _commandPressed {
   return keyboard.isControlPressed || keyboard.isMetaPressed;
 }
 
-/// The selection when its corners can be dragged: a single shape or image.
+/// The selection when its corners can be dragged: a single element but a
+/// text.
 BoardElement? _resizable(BoardController controller) {
   if (controller.session.readOnly || controller.selection.length != 1) return null;
   final e = controller.selected.firstOrNull;
-  return e != null && e.isSized ? e : null;
+  return e != null && e.canResize ? e : null;
 }
 
 /// The frame drawn around a selected element.
@@ -117,6 +119,9 @@ class _BoardViewState extends State<BoardView> {
   String? _followed;
   String? _lastTapId;
   DateTime _lastTapAt = DateTime(0);
+
+  /// Where the mouse is over the board, if it is.
+  Offset? _pointer;
 
   BoardController get controller => widget.controller;
 
@@ -230,7 +235,10 @@ class _BoardViewState extends State<BoardView> {
                   listenable: Listenable.merge([controller, _hoveredCorner]),
                   builder: (context, child) => MouseRegion(
                     cursor: _cursor(),
-                    onExit: (_) => session.moveCursor(null),
+                    onExit: (_) {
+                      _pointer = null;
+                      session.moveCursor(null);
+                    },
                     child: child,
                   ),
                   child: Listener(
@@ -460,6 +468,7 @@ class _BoardViewState extends State<BoardView> {
   }
 
   void _hover(PointerHoverEvent e) {
+    _pointer = e.localPosition;
     final world = controller.toWorld(e.localPosition);
     session.moveCursor(world);
     _hoveredCorner.value = controller.tool == BoardTool.select ? _cornerAt(world, e.kind) : null;
@@ -495,6 +504,7 @@ class _BoardViewState extends State<BoardView> {
       _touches[e.pointer] = e.localPosition;
     }
     if (e.pointer != _gesturePointer) return;
+    _pointer = e.localPosition;
     final world = controller.toWorld(e.localPosition);
     session.moveCursor(world);
     _gesture?.move(world, e);
@@ -577,6 +587,12 @@ class _BoardViewState extends State<BoardView> {
         session.redo();
       } else if (key == LogicalKeyboardKey.keyA) {
         controller.selectAll();
+      } else if (key == LogicalKeyboardKey.keyC) {
+        controller.copySelection();
+      } else if (key == LogicalKeyboardKey.keyX && !session.readOnly) {
+        controller.cutSelection();
+      } else if (key == LogicalKeyboardKey.keyV) {
+        controller.paste(controller.toWorld(_pointer ?? _size.center(Offset.zero)));
       } else if (_zoomIn.contains(key)) {
         controller.zoomBy(1.25, _size);
       } else if (_zoomOut.contains(key)) {
@@ -911,11 +927,12 @@ class _Move implements _Gesture {
 }
 
 /// Drags one [corner] of [element], the opposite one staying where it is. An
-/// image keeps its proportions, and so does a shape with Shift held.
+/// image or a freehand stroke keeps its proportions, and so does a shape with
+/// Shift held.
 class _Resize implements _Gesture {
   _Resize(this.view, this.element, int corner, this.start)
-    : _corner = _corners(_rect(element))[corner],
-      _anchor = _corners(_rect(element))[(corner + 2) % 4];
+    : _corner = _corners(element.box)[corner],
+      _anchor = _corners(element.box)[(corner + 2) % 4];
 
   final _BoardViewState view;
   final BoardElement element;
@@ -924,30 +941,27 @@ class _Resize implements _Gesture {
   final Offset _anchor;
   BoardElement? _resized;
 
-  static Rect _rect(BoardElement e) => Rect.fromLTWH(e.x, e.y, e.width, e.height);
-
   @override
   void move(Offset world, PointerMoveEvent event) {
-    final e = element;
+    final box = element.box;
     final span = _corner + (world - start) - _anchor;
     final least = 8 / view.controller.scale;
-    var width = math.max(span.dx.abs(), least), height = math.max(span.dy.abs(), least);
-    final proportional = e.kind == ElementKind.image || HardwareKeyboard.instance.isShiftPressed;
-    if (proportional && e.width > 0 && e.height > 0) {
-      final k = math.max(width / e.width, height / e.height);
-      width = e.width * k;
-      height = e.height * k;
+    var width = box.width == 0 ? 0.0 : math.max(span.dx.abs(), least);
+    var height = box.height == 0 ? 0.0 : math.max(span.dy.abs(), least);
+    final proportional =
+        element.kind == ElementKind.image ||
+        element.kind == ElementKind.stroke ||
+        HardwareKeyboard.instance.isShiftPressed;
+    if (proportional && box.width > 0 && box.height > 0) {
+      final k = math.max(width / box.width, height / box.height);
+      width = box.width * k;
+      height = box.height * k;
     }
     final rect = Rect.fromPoints(
       _anchor,
       _anchor + Offset(span.dx < 0 ? -width : width, span.dy < 0 ? -height : height),
     );
-    final resized = _resized = e.copyWith(
-      x: rect.left,
-      y: rect.top,
-      width: rect.width,
-      height: rect.height,
-    );
+    final resized = _resized = element.fitted(rect);
     view._interaction
       ..resized = resized
       ..changed();
