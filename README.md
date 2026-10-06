@@ -32,34 +32,37 @@ the whiteboards of the Documents app, and is released under the MIT license.
   reconnection, and never applied twice. Access can be withdrawn at any time.
 - **Your storage, your rules**: the server calls a two-method `Store`
   interface. Encryption, quotas and permissions stay in your application.
-- **Lightweight**: the Go package has no dependency outside the standard
-  library and is designed for small servers such as a Raspberry Pi.
+- **Lightweight**: the Go package depends on [trame](https://github.com/citadellefr/trame),
+  which has nothing outside the standard library, and is designed for small
+  servers such as a Raspberry Pi.
 
 ## How it works
 
 A board is a set of **elements**: strokes, lines, arrows, rectangles, ellipses,
-texts and images. An edit replaces or deletes whole elements.
+texts and images, each a node of a [trame](https://github.com/citadellefr/trame)
+document, stacked by the order of their keys. An edit creates elements, changes
+their attributes (their place, their colour, their points) or deletes them.
 
-The server applies edits in the order it receives them, and every client
-applies them in that same order. The last write of an element wins, and all
-clients converge on the same board. There is no merge algorithm to reason
-about. A client shows its own edits immediately, keeps them on top of what the
-server confirmed, and rolls them back if the server refuses them.
+The hub orders the edits it receives, rebases late ones over those it applied
+since, and every client does the same with what arrives: two people moving and
+recolouring the same element both see both changes, the last one winning on an
+attribute they both changed, and a deletion wins over everything done to the
+element meanwhile. A client shows its own edits immediately, keeps them on top
+of what the server confirmed, and rolls them back if the server refuses them.
+Undo takes back this person's own edits only, and leaves alone what others
+changed since.
 
 Performance comes from doing little:
 
-- the server reads nothing but element ids, without decoding the rest. It
-  relays cursors after a single scan, assembles frames by appending bytes and
-  saves a board only once edits pause;
+- cursors are relayed after a single scan, and a board is saved only once
+  edits pause;
 - a slow client is disconnected rather than allowed to hold anyone up. It
-  catches up from the full board when it reconnects;
+  catches up from the board or from the edits it missed when it reconnects;
 - the client records committed elements once, in pictures replayed at any
   zoom level. Each picture holds a few hundred neighbours in stacking order,
   so an edit only records its own again;
 - strokes are simplified before they are sent. A stroke in progress travels
   as the points added since the previous frame.
-
-On a laptop CPU, relaying an edit to eight participants takes about 24 µs.
 
 ## Server (Go)
 
@@ -165,25 +168,26 @@ short-lived ticket each time.
 
 ## Protocol
 
-JSON text frames over one WebSocket per board.
+trame's: JSON text frames over one WebSocket per board, described in
+[its README](https://github.com/citadellefr/trame#protocol). What belongs to
+a board:
 
-| From | Frame | Meaning |
-| --- | --- | --- |
-| client | `{"t":"op","n":7,"put":[…],"del":["id"]}` | edit number `n` of this client |
-| client | `{"t":"eph","d":{…}}` | cursor and drawing in progress, relayed as is |
-| server | `{"t":"hello","sid":3,"ack":6,"v":41,"saved":40,"ro":false,"peers":[…],"elements":[…]}` | the whole board, and the last edit of this client already applied |
-| server | `{"t":"op","sid":2,"put":[…],"del":[…]}` | someone else's edit |
-| server | `{"t":"ack","n":7,"v":42}` | own edit applied, as board version `v` |
-| server | `{"t":"nack","n":7,"error":"…"}` | own edit refused |
-| server | `{"t":"eph","sid":2,"d":{…}}` | someone else's cursor and drawing in progress |
-| server | `{"t":"join","peer":{…}}` / `{"t":"leave","sid":2}` | presence |
-| server | `{"t":"saved","v":42}` / `{"t":"error","error":"…"}` | board saved up to version `v`, or save failed |
+- every element is a node of type `e` at the root. Its key is its place in
+  the stack, `z` written as 11 hexadecimal digits of `z + 2^40`, which sorts as
+  the integers do; ties are broken by id (`fresque.Key`, `zKey` in Dart);
+- its attributes are the rest of the element: `k`, `x`, `y`, `w`, `h`, `p`,
+  `c`, `sw`, `f`, `d`, `tx`, `fs`, `src` (see below). Those a version does not
+  know are kept;
+- `{"t":"eph","d":{"c":[x,y],"d":{…}}}` is a cursor and a drawing in
+  progress, relayed as is.
 
-Close codes: `4000` board could not be loaded, `4001` access withdrawn, `4002`
-connection too slow, `4003` server shutting down. Each one carries a reason.
+Element ids are 1 to 64 characters from `[A-Za-z0-9_-]`. `id` and `z` are not
+attributes. A stroke in progress is an element that does not exist yet: the
+draft of a stroke carries `"o"`, the index of its first new point.
 
-Element ids are 1 to 64 characters from `[A-Za-z0-9_-]`, written without
-escapes, once per element. Beyond its id, an element is opaque to the server.
+A board that is not made of elements is refused, as is an edit that would grow
+it past `MaxElements`, `MaxElementBytes` or `MaxBoardBytes`; deleting is
+always allowed.
 
 ## File format
 
@@ -209,14 +213,15 @@ escapes, once per element. Beyond its id, an element is opaque to the server.
 | `src` | picture of an image, as a data URL |
 | `z` | stacking order, ties broken by id |
 
-The file has one element per line, sorted by id. Saving the same board twice
-produces the same bytes, which suits backups and diffs.
+The file has one element per line, sorted by id, `id` and `z` first and then
+the attributes sorted by name. Saving the same board twice produces the same
+bytes, which suits backups and diffs. A file written by an earlier version is
+read as it is, and written back in this order.
 
 ## Development
 
 ```sh
 go test -race ./...
-go test -run - -bench . ./...
 cd dart && flutter analyze && flutter test
 ```
 

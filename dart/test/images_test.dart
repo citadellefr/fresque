@@ -73,7 +73,7 @@ void main() {
       color: 0xFF000000,
       src: image.src,
     );
-    final board = Board()..reset([e], 0);
+    final board = TestBoard([e]);
     final scene = Scene();
     addTearDown(scene.dispose);
     final decoded = Completer<void>();

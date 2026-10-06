@@ -12,7 +12,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   Future<String> pdfOf(List<BoardElement> elements, {double pixelRatio = 1}) async {
-    final bytes = await exportPdf(Board()..reset(elements, 0), pixelRatio: pixelRatio);
+    final bytes = await exportPdf(TestBoard(elements), pixelRatio: pixelRatio);
     return latin1.decode(bytes!);
   }
 
@@ -31,7 +31,7 @@ void main() {
       strokeWidth: 4,
       dash: dash,
     );
-    final png = await exportPng(Board()..reset([line], 0), pixelRatio: 1, margin: 8);
+    final png = await exportPng(TestBoard([line]), pixelRatio: 1, margin: 8);
     final image = img.decodePng(png!)!;
     var count = 0, inked = false;
     for (var x = 0; x < image.width; x++) {
@@ -49,7 +49,7 @@ void main() {
   });
 
   test('an empty board has no PDF', () async {
-    expect(await exportPdf(Board()), isNull);
+    expect(await exportPdf(TestBoard()), isNull);
   });
 
   test('a small drawing fits on one portrait page', () async {
@@ -123,7 +123,7 @@ void main() {
   test('progress is told page by page', () async {
     final steps = <(int, int)>[];
     await exportPdf(
-      Board()..reset([rect('a'), rect('b', x: 5000)], 0),
+      TestBoard([rect('a'), rect('b', x: 5000)]),
       pixelRatio: 1,
       onProgress: (done, total) => steps.add((done, total)),
     );

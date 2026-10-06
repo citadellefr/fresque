@@ -1,7 +1,6 @@
 import 'dart:math' as math;
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:fresque/fresque.dart';
 import 'package:fresque/src/render.dart';
 
 import 'fakes.dart';
@@ -9,7 +8,7 @@ import 'fakes.dart';
 void main() {
   test('draws the board in order through any edits', () {
     final random = math.Random(7);
-    final board = Board()..reset([for (var i = 0; i < 600; i++) rect('e$i', z: i)], 0);
+    final board = TestBoard([for (var i = 0; i < 600; i++) rect('e$i', z: i)]);
     final scene = Scene();
     var hidden = <String>{};
 
@@ -43,7 +42,7 @@ void main() {
         case 2:
           board.edit([], some.toList());
         case 3:
-          board.applyRemote([rect('r$round', z: random.nextInt(board.topZ + 1))], []);
+          board.edit([rect('r$round', z: random.nextInt(board.topZ + 1))], []);
         case 4:
           hidden = random.nextBool() ? some : {};
       }
@@ -52,7 +51,7 @@ void main() {
   });
 
   test('a new scene draws a board already drawn by another', () {
-    final board = Board()..reset([rect('a'), rect('b', z: 2)], 0);
+    final board = TestBoard([rect('a'), rect('b', z: 2)]);
     Scene().sync(board, const {});
     final scene = Scene()..sync(board, const {});
     expect(scene.drawn.map((e) => e.id), ['a', 'b']);

@@ -2,6 +2,22 @@ import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
+import 'package:trame/trame.dart';
+
+/// The type of every node of a board: what an element is — a stroke, a
+/// rectangle — is its attribute `k`.
+const elementType = 'e';
+
+// 2^40, written out: a shift that wide is not exact in a JavaScript number.
+const _zOffset = 1099511627776;
+
+/// The key of the node of an element standing at [z] in the stack: an
+/// integer in hexadecimal, offset so that keys sort as integers do. The Go
+/// package writes the same ones (`fresque.Key`).
+String zKey(int z) => (z.clamp(-_zOffset, _zOffset - 1) + _zOffset).toRadixString(16).padLeft(11, '0');
+
+/// The place in the stack a key stands for, zero for a key that is not one.
+int zOf(String key) => key.length == 11 ? (int.tryParse(key, radix: 16) ?? _zOffset) - _zOffset : 0;
 
 enum ElementKind {
   stroke('s'),
@@ -174,6 +190,12 @@ class BoardElement {
 
   double get arrowHeadLength => math.max(12, strokeWidth * 4);
 
+  /// What the node of the element holds: everything but its id and its place
+  /// in the stack, which are its node's own.
+  Map<String, Object?> get attributes => toJson()
+    ..remove('id')
+    ..remove('z');
+
   Map<String, Object?> toJson() => {
     'id': id,
     'k': kind.code,
@@ -190,6 +212,11 @@ class BoardElement {
     if (kind == ElementKind.text) ...{'tx': text, 'fs': _num(fontSize)},
     if (kind == ElementKind.image) 'src': src,
   };
+
+  /// Null for a node this version cannot draw, which is then left alone.
+  static BoardElement? fromNode(Node node) => node.type != elementType
+      ? null
+      : fromJson({...node.attributes, 'id': node.id, 'z': zOf(node.key)});
 
   /// Null for anything this version cannot draw, which is then left alone.
   static BoardElement? fromJson(Object? json) {

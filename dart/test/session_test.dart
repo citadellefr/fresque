@@ -11,10 +11,17 @@ void main() {
   late FakeServer server;
   late BoardSession session;
 
-  Future<void> connect({Map<String, Object?>? greeting}) async {
+  /// Joins the way the hub is joined: it says who is there, the client asks
+  /// for the document, and the hub sends it.
+  Future<void> connect({
+    Map<String, Object?>? greeting,
+    Iterable<BoardElement> elements = const [],
+  }) async {
     session.start();
     await pumpEventQueue();
     server.last.receive(greeting ?? hello());
+    await pumpEventQueue();
+    server.last.receive(doc(elements));
     await pumpEventQueue();
   }
 
@@ -29,13 +36,14 @@ void main() {
     expect(session.status, BoardStatus.connecting);
     await connect(
       greeting: hello(
-        elements: [rect('a').toJson()],
         peers: [
           {'sid': 2, 'id': '7', 'name': 'Alice'},
         ],
       ),
+      elements: [rect('a')],
     );
     expect(server.clientIds, ['client']);
+    expect(server.last.sentOfType('sync'), hasLength(1));
     expect(session.status, BoardStatus.online);
     expect(session.board['a'], isNotNull);
     expect(session.peers.single.name, 'Alice');
@@ -45,19 +53,47 @@ void main() {
   test('sends edits and follows them until they are saved', () async {
     await connect();
     session.apply(put: [rect('a')]);
-    final op = server.last.sentOfType('op').single;
-    expect(op['n'], 1);
-    expect((op['put']! as List).single, rect('a').toJson());
+    final sent = server.last.sentOfType('op').single;
+    expect(sent['n'], 1);
+    expect(sent['d'], [created(rect('a'))]);
+    expect(session.board['a'], isNotNull);
     expect(session.saved, isFalse);
 
     server.last.receive({'t': 'ack', 'n': 1, 'v': 4});
     await pumpEventQueue();
-    expect(session.board.hasPending, isFalse);
     expect(session.saved, isFalse);
 
     server.last.receive({'t': 'saved', 'v': 4});
     await pumpEventQueue();
     expect(session.saved, isTrue);
+  });
+
+  test('sends what changed of an element, and its place in the stack', () async {
+    await connect(elements: [rect('a')]);
+    session.apply(put: [rect('a', x: 5).copyWith(z: 9)]);
+    session.apply(delete: ['a']);
+    server.last.receive({'t': 'ack', 'n': 1, 'v': 1});
+    await pumpEventQueue();
+    expect(server.last.sentOfType('op').map((op) => op['d']), [
+      [
+        {
+          'o': 'set',
+          'id': 'a',
+          'k': zKey(9),
+          'a': {'x': 5},
+        },
+      ],
+      [
+        {'o': 'del', 'id': 'a'},
+      ],
+    ]);
+  });
+
+  test('sends nothing for an element as it already is', () async {
+    await connect(elements: [rect('a')]);
+    session.apply(put: [rect('a')]);
+    expect(server.last.sentOfType('op'), isEmpty);
+    expect(session.canUndo, isFalse);
   });
 
   test('a refused edit is rolled back and reported', () async {
@@ -104,11 +140,7 @@ void main() {
     expect(alice.cursor, const Offset(5, 6));
     expect(alice.draft?.id, 'r');
 
-    server.last.receive({
-      't': 'op',
-      'sid': 2,
-      'put': [rect('r').toJson()],
-    });
+    server.last.receive(op([created(rect('r'))], version: 1));
     await pumpEventQueue();
     expect(session.board['r'], isNotNull);
     expect(alice.draft, isNull);
@@ -119,6 +151,8 @@ void main() {
       session.start();
       async.flushMicrotasks();
       server.last.receive(hello());
+      async.flushMicrotasks();
+      server.last.receive(doc(const []));
       async.flushMicrotasks();
 
       BoardElement stroke(List<double> points) => BoardElement(
@@ -147,11 +181,39 @@ void main() {
     });
   });
 
+  test('shows the pointer and the draft again once back online', () {
+    fakeAsync((async) {
+      session.start();
+      async.flushMicrotasks();
+      server.last.receive(hello());
+      async.flushMicrotasks();
+      server.last.receive(doc(const []));
+      async.flushMicrotasks();
+
+      session.moveCursor(const Offset(3, 4));
+      async.elapse(const Duration(milliseconds: 50));
+      unawaited(server.last.drop());
+      async.flushMicrotasks();
+      async.elapse(const Duration(seconds: 1));
+      server.last.receive(hello());
+      async.flushMicrotasks();
+      server.last.receive(doc(const [], ack: 0));
+      async.flushMicrotasks();
+      async.elapse(const Duration(milliseconds: 50));
+
+      expect([for (final frame in server.last.sentOfType('eph')) (frame['d']! as Map)['c']], [
+        [3, 4],
+      ]);
+    });
+  });
+
   test('reconnects and sends again what the server did not apply', () {
     fakeAsync((async) {
       session.start();
       async.flushMicrotasks();
       server.last.receive(hello());
+      async.flushMicrotasks();
+      server.last.receive(doc(const []));
       async.flushMicrotasks();
 
       session.apply(put: [rect('a')]);
@@ -163,12 +225,17 @@ void main() {
       session.apply(put: [rect('c')]);
       async.elapse(const Duration(seconds: 1));
       expect(server.transports, hasLength(2));
-      server.last.receive(hello(ack: 1, elements: [rect('a').toJson()]));
+      server.last.receive(hello());
+      async.flushMicrotasks();
+      // the first edit reached the hub, the others did not
+      server.last.receive(doc([rect('a')], version: 1, ack: 1));
       async.flushMicrotasks();
 
       expect(session.status, BoardStatus.online);
-      expect(server.last.sentOfType('op').map((op) => op['n']), [2, 3]);
       expect(session.board.elements.map((e) => e.id), ['a', 'b', 'c']);
+      final sent = server.last.sentOfType('op');
+      expect(sent.map((op) => op['n']), [2]);
+      expect((sent.single['d']! as List).cast<Map<String, Object?>>().map((c) => c['id']), ['b', 'c']);
     });
   });
 
@@ -186,16 +253,18 @@ void main() {
   });
 
   test('undo and redo leave the edits of others alone', () async {
-    await connect(
-      greeting: hello(elements: [rect('a'), rect('b')].map((e) => e.toJson()).toList()),
-    );
+    await connect(elements: [rect('a'), rect('b')]);
     session.apply(put: [rect('a', x: 10), rect('b', x: 10)]);
     server.last.receive({'t': 'ack', 'n': 1, 'v': 1});
-    server.last.receive({
-      't': 'op',
-      'sid': 2,
-      'put': [rect('b', x: 99).toJson()],
-    });
+    server.last.receive(
+      op([
+        {
+          'o': 'set',
+          'id': 'b',
+          'a': {'x': 99},
+        },
+      ], version: 2),
+    );
     await pumpEventQueue();
 
     session.undo();
@@ -218,11 +287,11 @@ void main() {
   test('tells where each peer last edited, drawing included', () async {
     await connect(
       greeting: hello(
-        elements: [rect('old', x: 500, y: 500).toJson()],
         peers: [
           {'sid': 2, 'id': '7', 'name': 'Alice'},
         ],
       ),
+      elements: [rect('old', x: 500, y: 500)],
     );
     final edits = <BoardPeer>[];
     final subscription = session.edits.listen(edits.add);
@@ -239,12 +308,12 @@ void main() {
     await pumpEventQueue();
     expect(alice.lastEdit, rect('r', x: 100, y: 100).bounds);
 
-    server.last.receive({
-      't': 'op',
-      'sid': 2,
-      'put': [rect('r', x: 100, y: 100).toJson()],
-      'del': ['old'],
-    });
+    server.last.receive(
+      op([
+        created(rect('r', x: 100, y: 100)),
+        {'o': 'del', 'id': 'old'},
+      ], version: 1),
+    );
     await pumpEventQueue();
     expect(
       alice.lastEdit,

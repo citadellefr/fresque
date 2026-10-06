@@ -1,49 +1,34 @@
-import 'dart:collection';
-import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
+import 'package:trame/trame.dart';
 
 import 'element.dart';
 
-/// A local edit on its way to the server, numbered in the order it was made.
-class Operation {
-  Operation(this.n, this.put, this.delete);
-
-  final int n;
-  final List<BoardElement> put;
-  final List<String> delete;
-
-  String encode() => jsonEncode({
-    't': 'op',
-    'n': n,
-    if (put.isNotEmpty) 'put': [for (final e in put) e.toJson()],
-    if (delete.isNotEmpty) 'del': delete,
-  });
-}
-
-/// The elements of a board as this client sees them: the state the server
-/// confirmed, with the local edits it has not acknowledged yet on top.
+/// The elements of a board as this client sees them, read from the document
+/// of its session: confirmed edits and local ones alike, which the session
+/// rebases as others arrive.
 ///
-/// The server applies edits in the order it receives them and every client
-/// applies them in that same order, so an acknowledged edit simply moves from
-/// the local layer to the confirmed one.
+/// It follows the document edit by edit ([follow]) and keeps what the view
+/// asks of it at hand: the elements in stacking order, and which ones changed
+/// since it last looked.
 class Board extends ChangeNotifier {
-  final _confirmed = <String, BoardElement>{};
-  final _local = <String, BoardElement?>{};
-  final _counts = <String, int>{};
-  final _pending = ListQueue<Operation>();
+  Board(this._document);
+
+  final Tree Function() _document;
+  final _elements = <String, BoardElement>{};
   final _changed = <String>{};
   var _everything = true;
-  var _next = 1;
   var _topZ = 0;
   var _bottomZ = 0;
   List<BoardElement>? _sorted;
+  Rect? _area;
 
-  BoardElement? operator [](String id) => _local.containsKey(id) ? _local[id] : _confirmed[id];
+  BoardElement? operator [](String id) => _elements[id];
 
   /// Every element, bottom to top.
-  List<BoardElement> get elements => _sorted ??= _sort();
+  List<BoardElement> get elements => _sorted ??= (_elements.values.toList()..sort(compareElements));
 
   /// At least the highest z of the board, without sorting it: an element
   /// given `topZ + 1` goes above all the others.
@@ -52,9 +37,8 @@ class Board extends ChangeNotifier {
   /// At most the lowest z of the board.
   int get bottomZ => _bottomZ;
 
-  Iterable<Operation> get pending => _pending;
-
-  bool get hasPending => _pending.isNotEmpty;
+  /// What the last edit touched, before and after.
+  Rect? get lastArea => _area;
 
   /// The ids whose element changed since the last call, or null when the
   /// whole board did.
@@ -69,123 +53,34 @@ class Board extends ChangeNotifier {
     return changes;
   }
 
-  Operation edit(List<BoardElement> put, List<String> delete) {
-    final op = Operation(_next++, put, delete);
-    for (final e in put) {
-      _overlay(e.id, e);
-      _span(e);
-    }
-    for (final id in delete) {
-      _overlay(id, null);
-    }
-    _pending.add(op);
-    notifyListeners();
-    return op;
-  }
-
-  void acknowledge(int n) {
-    if (_pending.isEmpty || _pending.first.n != n) return;
-    final op = _pending.removeFirst();
-    for (final e in op.put) {
-      _confirmed[e.id] = e;
-    }
-    for (final id in op.delete) {
-      _confirmed.remove(id);
-    }
-    _release(op, visible: false);
-  }
-
-  void reject(int n) {
-    if (_pending.isEmpty || _pending.first.n != n) return;
-    _release(_pending.removeFirst(), visible: true);
-    notifyListeners();
-  }
-
-  void applyRemote(List<BoardElement> put, List<String> delete) {
-    for (final e in put) {
-      _confirmed[e.id] = e;
-      _span(e);
-      if (!_local.containsKey(e.id)) _touch(e.id);
-    }
-    for (final id in delete) {
-      _confirmed.remove(id);
-      if (!_local.containsKey(id)) _touch(id);
-    }
-    notifyListeners();
-  }
-
-  /// Replaces the confirmed state with the board the server sent on
-  /// connection, drops the edits it had already applied ([ack] is the last
-  /// one) and returns the others, to be sent again.
-  List<Operation> reset(Iterable<BoardElement> elements, int ack) {
-    _confirmed
-      ..clear()
-      ..addEntries(elements.map((e) => MapEntry(e.id, e)));
-    while (_pending.isNotEmpty && _pending.first.n <= ack) {
-      _pending.removeFirst();
-    }
-    _local.clear();
-    _counts.clear();
-    _topZ = _bottomZ = 0;
-    _confirmed.values.forEach(_span);
-    for (final op in _pending) {
-      for (final e in op.put) {
-        _local[e.id] = e;
-        _counts.update(e.id, (c) => c + 1, ifAbsent: () => 1);
-        _span(e);
+  /// Takes up an edit the document has just made.
+  void follow(Edit edit) {
+    final document = _document();
+    Rect? area;
+    for (final change in edit.changes) {
+      if (change.kind != ChangeKind.create && change.kind != ChangeKind.set && change.kind != ChangeKind.delete) {
+        continue;
       }
-      for (final id in op.delete) {
-        _local[id] = null;
-        _counts.update(id, (c) => c + 1, ifAbsent: () => 1);
+      final before = _elements[change.id];
+      final node = document[change.id];
+      final after = node == null ? null : BoardElement.fromNode(node);
+      if (before == null && after == null) continue;
+      if (after == null) {
+        _elements.remove(change.id);
+      } else {
+        _elements[change.id] = after;
+        _topZ = math.max(_topZ, after.z);
+        _bottomZ = math.min(_bottomZ, after.z);
+      }
+      _changed.add(change.id);
+      _sorted = null;
+      for (final box in [?before?.bounds, ?after?.bounds]) {
+        area = area?.expandToInclude(box) ?? box;
       }
     }
-    _everything = true;
-    _sorted = null;
+    if (area == null) return;
+    _area = area;
     notifyListeners();
-    return _pending.toList();
-  }
-
-  void _overlay(String id, BoardElement? e) {
-    _local[id] = e;
-    _counts.update(id, (c) => c + 1, ifAbsent: () => 1);
-    _touch(id);
-  }
-
-  void _span(BoardElement e) {
-    _topZ = math.max(_topZ, e.z);
-    _bottomZ = math.min(_bottomZ, e.z);
-  }
-
-  void _release(Operation op, {required bool visible}) {
-    void release(String id) {
-      final count = _counts[id]! - 1;
-      if (count > 0) {
-        _counts[id] = count;
-        return;
-      }
-      _counts.remove(id);
-      _local.remove(id);
-      if (visible) _touch(id);
-    }
-
-    for (final e in op.put) {
-      release(e.id);
-    }
-    op.delete.forEach(release);
-  }
-
-  void _touch(String id) {
-    _changed.add(id);
-    _sorted = null;
-  }
-
-  List<BoardElement> _sort() {
-    final all = <BoardElement>[
-      for (final e in _confirmed.values)
-        if (!_local.containsKey(e.id)) e,
-      for (final e in _local.values) ?e,
-    ];
-    return all..sort(compareElements);
   }
 }
 

@@ -1,83 +1,42 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:trame/trame.dart';
 
 import 'board.dart';
 import 'element.dart';
 
+export 'package:trame/trame.dart' show randomId, webSocketConnector;
+
 /// The text link to the server, behind an interface so that sessions can be
 /// tested without one.
-abstract interface class BoardTransport {
-  Stream<String> get messages;
-  int? get closeCode;
-  String? get closeReason;
-  void send(String data);
-  Future<void> close();
-}
+typedef BoardTransport = DocTransport;
 
 /// Opens a transport for the session whose client id is given; called again
 /// on every reconnection.
-typedef BoardConnector = Future<BoardTransport> Function(String clientId);
+typedef BoardConnector = DocConnector;
 
-/// A connector over WebSocket. [url] is asked again on every connection, so
-/// it may carry a short-lived ticket.
-BoardConnector webSocketConnector(Future<Uri> Function(String clientId) url) => (clientId) async {
-  final channel = WebSocketChannel.connect(await url(clientId));
-  await channel.ready;
-  return _WebSocketTransport(channel);
-};
-
-class _WebSocketTransport implements BoardTransport {
-  _WebSocketTransport(this._channel);
-
-  final WebSocketChannel _channel;
-
-  @override
-  Stream<String> get messages =>
-      _channel.stream.map((m) => m is String ? m : utf8.decode(m as List<int>));
-
-  @override
-  int? get closeCode => _channel.closeCode;
-
-  @override
-  String? get closeReason => _channel.closeReason;
-
-  @override
-  void send(String data) => _channel.sink.add(data);
-
-  @override
-  Future<void> close() async => _channel.sink.close();
-}
-
-enum BoardStatus { connecting, online, offline, closed }
+typedef BoardStatus = DocStatus;
 
 /// Why the server ended the session: the board could not be opened, or access
 /// to it was withdrawn. [reason] is the server's own words.
-class BoardClosed implements Exception {
-  const BoardClosed(this.code, this.reason);
-
-  final int code;
-  final String reason;
-
-  @override
-  String toString() => reason;
-}
+typedef BoardClosed = DocClosed;
 
 class BoardPeer {
-  BoardPeer._(this.sid, this.id, this.name, this.readOnly);
+  BoardPeer._(this._peer);
 
-  final int sid;
-  final String id;
-  final String name;
-  final bool readOnly;
+  final DocPeer _peer;
 
   Offset? _cursor;
   BoardElement? _draft;
   Rect? _lastEdit;
+
+  int get sid => _peer.sid;
+  String get id => _peer.id;
+  String get name => _peer.name;
+  bool get readOnly => _peer.readOnly;
 
   Offset? get cursor => _cursor;
 
@@ -88,53 +47,44 @@ class BoardPeer {
   Rect? get lastEdit => _lastEdit;
 }
 
-class _Change {
-  _Change(this.before, this.after);
-
-  final Map<String, BoardElement?> before;
-  final Map<String, BoardElement?> after;
-}
-
 class _Presence extends ChangeNotifier {
   void changed() => notifyListeners();
 }
 
 /// One person's connection to a board: keeps [board] in step with the server,
 /// sends local edits, reconnects when the link drops and keeps the history
-/// [undo] and [redo] walk through.
+/// [undo] and [redo] walk through. The document and its protocol are trame's;
+/// what is added here is the board it makes, and what people show of what
+/// they are doing — a pointer, a stroke being drawn.
 class BoardSession extends ChangeNotifier {
-  BoardSession(this._connect, {String? clientId}) : clientId = clientId ?? randomId();
+  BoardSession(BoardConnector connect, {String? clientId})
+    : _doc = DocSession(connect, clientId: clientId, othersPrevail: true) {
+    board = Board(() => _doc.document);
+    _subscriptions = [
+      _doc.changes.listen(board.follow),
+      _doc.authored.listen(_authored),
+    ];
+    _doc
+      ..addListener(_changed)
+      ..presence.addListener(_presence.changed)
+      ..onShared = _shared;
+  }
 
-  static const _historyLimit = 200;
   static const _presenceEvery = Duration(milliseconds: 40);
-  static const _backoff = [1, 2, 5, 10, 20, 30];
 
-  final BoardConnector _connect;
-  final String clientId;
-  final board = Board();
+  final DocSession _doc;
+  late final Board board;
+  late final List<StreamSubscription<Object?>> _subscriptions;
 
   /// Notifies cursor and draft changes, far more frequent than the others.
   final Listenable presence = _Presence();
+  _Presence get _presence => presence as _Presence;
 
   final _peers = <int, BoardPeer>{};
-  final _undo = <_Change>[];
-  final _redo = <_Change>[];
-  final _rejections = StreamController<String>.broadcast();
   final _edits = StreamController<BoardPeer>.broadcast();
 
-  BoardStatus _status = BoardStatus.connecting;
-  Object? _failure;
-  String? _saveError;
-  var _readOnly = false;
-  var _running = false;
+  var _wasOnline = false;
   var _disposed = false;
-  var _attempt = 0;
-  var _savedVersion = 0;
-  var _ackVersion = 0;
-  BoardTransport? _transport;
-  StreamSubscription<String>? _subscription;
-  Timer? _retry;
-
   Offset? _cursor;
   var _cursorDirty = false;
   BoardElement? _draft;
@@ -142,128 +92,93 @@ class BoardSession extends ChangeNotifier {
   var _draftSent = 0;
   Timer? _presenceTimer;
 
-  BoardStatus get status => _status;
+  String get clientId => _doc.clientId;
+
+  BoardStatus get status => _doc.status;
 
   /// Why the session is offline or closed, when it knows.
-  Object? get failure => _failure;
+  Object? get failure => _doc.failure;
 
   /// Why the last save failed, until one succeeds.
-  String? get saveError => _saveError;
+  String? get saveError => _doc.saveError;
 
-  bool get readOnly => _readOnly;
+  bool get readOnly => _doc.readOnly;
 
-  Iterable<BoardPeer> get peers => _peers.values;
+  Iterable<BoardPeer> get peers => _doc.peers.map(_peer);
 
   /// Whether every local edit reached the file.
-  bool get saved => !board.hasPending && _savedVersion >= _ackVersion && _saveError == null;
+  bool get saved => _doc.saved;
 
-  bool get canUndo => _undo.isNotEmpty;
+  bool get canUndo => _doc.canUndo;
 
-  bool get canRedo => _redo.isNotEmpty;
+  bool get canRedo => _doc.canRedo;
 
   /// Why the server refused a local edit, which has been rolled back.
-  Stream<String> get rejections => _rejections.stream;
+  Stream<String> get rejections => _doc.rejections;
 
   /// The peer whose [BoardPeer.lastEdit] just moved.
   Stream<BoardPeer> get edits => _edits.stream;
 
-  void start() {
-    if (_running || _disposed) return;
-    _running = true;
-    _failure = null;
-    _attempt = 0;
-    unawaited(_open());
-  }
+  void start() => _doc.start();
 
   /// Reconnects now, after a close or while waiting for the next retry.
-  void retry() {
-    _retry?.cancel();
-    _retry = null;
-    if (_running && (_transport != null || _status == BoardStatus.connecting)) return;
-    _running = false;
-    start();
-  }
+  void retry() => _doc.retry();
 
   Future<void> stop() async {
-    _running = false;
-    _retry?.cancel();
     _presenceTimer?.cancel();
-    final transport = _transport;
-    _transport = null;
-    await _subscription?.cancel();
-    _subscription = null;
-    await transport?.close();
+    await _doc.stop();
   }
 
   @override
   void dispose() {
     _disposed = true;
-    unawaited(stop());
-    unawaited(_rejections.close());
+    _presenceTimer?.cancel();
+    for (final subscription in _subscriptions) {
+      unawaited(subscription.cancel());
+    }
     unawaited(_edits.close());
+    _doc.dispose();
     board.dispose();
-    (presence as _Presence).dispose();
+    _presence.dispose();
     super.dispose();
   }
 
   /// Puts and deletes elements as one edit, which [undo] reverts as a whole.
   void apply({Iterable<BoardElement> put = const [], Iterable<String> delete = const []}) {
-    if (_readOnly) return;
-    final before = <String, BoardElement?>{};
-    final after = <String, BoardElement?>{};
+    if (readOnly) return;
+    final changes = <Change>[];
     for (final e in put) {
-      before[e.id] = board[e.id];
-      after[e.id] = e;
+      if (_put(board[e.id], e) case final change?) changes.add(change);
     }
     for (final id in delete) {
-      final current = board[id];
-      if (current == null) continue;
-      before[id] = current;
-      after[id] = null;
+      if (board[id] != null) changes.add(Change.delete(id));
     }
-    if (after.isEmpty) return;
-    _commit(after);
-    _undo.add(_Change(before, after));
-    if (_undo.length > _historyLimit) _undo.removeAt(0);
-    _redo.clear();
-    notifyListeners();
+    if (changes.isNotEmpty) _doc.edit(Edit(changes));
   }
 
-  void undo() => _travel(_undo, _redo, forward: false);
-
-  void redo() => _travel(_redo, _undo, forward: true);
-
-  /// Reverts a change, element by element, except where somebody else changed
-  /// the element since: their edit stands.
-  void _travel(List<_Change> from, List<_Change> to, {required bool forward}) {
-    if (_readOnly) return;
-    while (from.isNotEmpty) {
-      final change = from.removeLast();
-      final expected = forward ? change.before : change.after;
-      final target = forward ? change.after : change.before;
-      final state = <String, BoardElement?>{
-        for (final entry in target.entries)
-          if (_same(board[entry.key], expected[entry.key])) entry.key: entry.value,
-      };
-      if (state.isEmpty) continue;
-      _commit(state);
-      to.add(change);
-      notifyListeners();
-      return;
+  /// What it takes to make [to] of [from]: the element created, or its
+  /// attributes and its place in the stack changed — nothing when there is
+  /// nothing to change.
+  Change? _put(BoardElement? from, BoardElement to) {
+    final attributes = to.attributes;
+    if (from == null) {
+      return Change.create(Node(id: to.id, type: elementType, key: zKey(to.z), attributes: attributes));
     }
-    notifyListeners();
+    final before = from.attributes;
+    final changed = <String, Object?>{
+      for (final entry in attributes.entries)
+        if (!before.containsKey(entry.key) || !_same(before[entry.key], entry.value)) entry.key: entry.value,
+      for (final key in before.keys)
+        if (!attributes.containsKey(key)) key: null,
+    };
+    final key = from.z == to.z ? '' : zKey(to.z);
+    if (changed.isEmpty && key.isEmpty) return null;
+    return Change.set(to.id, key: key, attributes: changed);
   }
 
-  void _commit(Map<String, BoardElement?> state) {
-    final op = board.edit(
-      [for (final e in state.values) ?e],
-      [
-        for (final entry in state.entries)
-          if (entry.value == null) entry.key,
-      ],
-    );
-    if (_status == BoardStatus.online) _transport?.send(op.encode());
-  }
+  void undo() => _doc.undo();
+
+  void redo() => _doc.redo();
 
   /// Where this person's pointer is on the board, null once it left.
   void moveCursor(Offset? position) {
@@ -288,8 +203,7 @@ class BoardSession extends ChangeNotifier {
   }
 
   void _flushPresence() {
-    final transport = _transport;
-    if (transport == null || _status != BoardStatus.online) return;
+    if (_disposed || _doc.status != BoardStatus.online) return;
     final data = <String, Object?>{};
     if (_cursorDirty) {
       final cursor = _cursor;
@@ -302,165 +216,37 @@ class BoardSession extends ChangeNotifier {
         data['d'] = null;
       } else if (draft.kind == ElementKind.stroke) {
         final from = math.min(_draftSent, draft.points.length) & ~1;
-        data['d'] = draft.copyWith(points: Float32List.sublistView(draft.points, from)).toJson()
-          ..['o'] = from;
+        data['d'] = draft.copyWith(points: Float32List.sublistView(draft.points, from)).toJson()..['o'] = from;
         _draftSent = draft.points.length;
       } else {
         data['d'] = draft.toJson();
       }
       _draftDirty = false;
     }
-    if (data.isNotEmpty) transport.send(jsonEncode({'t': 'eph', 'd': data}));
+    if (data.isNotEmpty) _doc.share(data, now: true);
   }
 
-  Future<void> _open() async {
-    _setStatus(BoardStatus.connecting);
-    final BoardTransport transport;
-    try {
-      transport = await _connect(clientId);
-    } on Object catch (error) {
-      if (!_running) return;
-      _failure = error;
-      _setStatus(BoardStatus.offline);
-      _scheduleRetry();
-      return;
+  /// The session moved: what is shown is told again once it is back online,
+  /// and peers who left are forgotten.
+  void _changed() {
+    final online = _doc.status == BoardStatus.online;
+    if (online && !_wasOnline) {
+      _cursorDirty = _cursor != null;
+      _draftSent = 0;
+      _draftDirty = _draft != null;
+      if (_cursorDirty || _draftDirty) _schedulePresence();
     }
-    if (!_running) {
-      await transport.close();
-      return;
-    }
-    _transport = transport;
-    _subscription = transport.messages.listen(
-      _receive,
-      onDone: () => _dropped(transport),
-      onError: (Object _) {},
-      cancelOnError: false,
-    );
-  }
-
-  void _dropped(BoardTransport transport) {
-    if (!identical(transport, _transport)) return;
-    _transport = null;
-    _subscription = null;
-    _peers.clear();
-    (presence as _Presence).changed();
-    if (!_running) return;
-    final code = transport.closeCode;
-    if (code == 4000 || code == 4001) {
-      _running = false;
-      _failure = BoardClosed(code!, transport.closeReason ?? '');
-      _setStatus(BoardStatus.closed);
-      return;
-    }
-    _setStatus(BoardStatus.offline);
-    _scheduleRetry();
-  }
-
-  void _scheduleRetry() {
-    final delay = _backoff[math.min(_attempt, _backoff.length - 1)];
-    _attempt++;
-    _retry = Timer(Duration(seconds: delay), () {
-      if (_running) unawaited(_open());
-    });
-  }
-
-  void _setStatus(BoardStatus status) {
-    if (_disposed) return;
-    _status = status;
+    _wasOnline = online;
+    final here = {for (final peer in _doc.peers) peer.sid};
+    _peers.removeWhere((sid, _) => !here.contains(sid));
     notifyListeners();
   }
 
-  void _receive(String raw) {
-    final Object? decoded;
-    try {
-      decoded = jsonDecode(raw);
-    } on FormatException {
-      return;
-    }
-    if (decoded is! Map<String, Object?>) return;
-    switch (decoded['t']) {
-      case 'hello':
-        _hello(decoded);
-      case 'op':
-        _remote(decoded);
-      case 'ack':
-        board.acknowledge(_int(decoded['n']));
-        _ackVersion = math.max(_ackVersion, _int(decoded['v']));
-        notifyListeners();
-      case 'nack':
-        board.reject(_int(decoded['n']));
-        _rejections.add('${decoded['error'] ?? ''}');
-        notifyListeners();
-      case 'eph':
-        _presence(decoded);
-      case 'join':
-        final peer = _peer(decoded['peer']);
-        if (peer != null) _peers[peer.sid] = peer;
-        notifyListeners();
-      case 'leave':
-        _peers.remove(_int(decoded['sid']));
-        notifyListeners();
-        (presence as _Presence).changed();
-      case 'saved':
-        _savedVersion = math.max(_savedVersion, _int(decoded['v']));
-        _saveError = null;
-        notifyListeners();
-      case 'error':
-        _saveError = '${decoded['error'] ?? ''}';
-        notifyListeners();
-    }
-  }
+  BoardPeer _peer(DocPeer peer) => _peers.putIfAbsent(peer.sid, () => BoardPeer._(peer));
 
-  void _hello(Map<String, Object?> hello) {
-    _readOnly = hello['ro'] == true;
-    _savedVersion = _int(hello['saved']);
-    _ackVersion = _int(hello['v']);
-    _saveError = hello['error'] is String ? hello['error']! as String : null;
-    _peers.clear();
-    for (final raw in _list(hello['peers'])) {
-      final peer = _peer(raw);
-      if (peer != null) _peers[peer.sid] = peer;
-    }
-    final resend = board.reset(_elements(hello['elements']), _int(hello['ack']));
-    _attempt = 0;
-    _failure = null;
-    _setStatus(BoardStatus.online);
-    for (final op in resend) {
-      _transport?.send(op.encode());
-    }
-    _cursorDirty = _cursor != null;
-    _draftSent = 0;
-    _draftDirty = _draft != null;
-    if (_cursorDirty || _draftDirty) _schedulePresence();
-    (presence as _Presence).changed();
-  }
-
-  void _remote(Map<String, Object?> op) {
-    final put = _elements(op['put']);
-    final delete = [
-      for (final id in _list(op['del']))
-        if (id is String) id,
-    ];
-    final peer = _peers[_int(op['sid'])];
-    final areas = [
-      for (final e in put) e.bounds,
-      for (final id in delete) ?board[id]?.bounds,
-    ];
-    board.applyRemote(put, delete);
-    if (peer != null && areas.isNotEmpty) {
-      _edited(peer, areas.reduce((a, b) => a.expandToInclude(b)));
-    }
-    final draft = peer?._draft;
-    if (draft != null && (put.any((e) => e.id == draft.id) || delete.contains(draft.id))) {
-      peer!._draft = null;
-      (presence as _Presence).changed();
-    }
-  }
-
-  void _presence(Map<String, Object?> frame) {
-    final peer = _peers[_int(frame['sid'])];
-    final data = frame['d'];
-    if (peer == null || data is! Map<String, Object?>) return;
+  /// What a peer shows: a pointer, a draft.
+  void _shared(DocPeer from, Map<String, Object?> data) {
+    final peer = _peer(from);
     if (data.containsKey('c')) {
       final c = _list(data['c']);
       peer._cursor = c.length == 2 && c[0] is num && c[1] is num
@@ -483,43 +269,45 @@ class BoardSession extends ChangeNotifier {
       }
       if (peer._draft case final draft?) _edited(peer, draft.bounds);
     }
-    (presence as _Presence).changed();
+    _presence.changed();
+  }
+
+  /// What others did to the board: where they drew, and the end of the draft
+  /// that became an element.
+  void _authored(({Edit edit, DocPeer? author}) event) {
+    final author = event.author;
+    if (author == null) return;
+    final peer = _peer(author);
+    if (board.lastArea case final area?) _edited(peer, area);
+    final draft = peer._draft;
+    if (draft != null && event.edit.changes.any((c) => c.id == draft.id)) {
+      peer._draft = null;
+      _presence.changed();
+    }
   }
 
   void _edited(BoardPeer peer, Rect area) {
     peer._lastEdit = area;
-    _edits.add(peer);
+    if (!_edits.isClosed) _edits.add(peer);
   }
-
-  static BoardPeer? _peer(Object? raw) {
-    if (raw is! Map<String, Object?>) return null;
-    return BoardPeer._(
-      _int(raw['sid']),
-      '${raw['id'] ?? ''}',
-      '${raw['name'] ?? ''}',
-      raw['ro'] == true,
-    );
-  }
-
-  static List<BoardElement> _elements(Object? raw) => [
-    for (final e in _list(raw)) ?BoardElement.fromJson(e),
-  ];
 
   static List<Object?> _list(Object? raw) => raw is List<Object?> ? raw : const [];
 
   static int _int(Object? raw) => raw is num ? raw.toInt() : 0;
 }
 
-bool _same(BoardElement? a, BoardElement? b) {
-  if (identical(a, b)) return true;
-  if (a == null || b == null) return false;
-  return jsonEncode(a.toJson()) == jsonEncode(b.toJson());
+/// Whether two JSON values are the same, lists and objects compared by what
+/// they hold.
+bool _same(Object? a, Object? b) {
+  if (a is List<Object?> && b is List<Object?>) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (!_same(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  if (a is Map<String, Object?> && b is Map<String, Object?>) {
+    return a.length == b.length && a.entries.every((e) => b.containsKey(e.key) && _same(e.value, b[e.key]));
+  }
+  return a == b;
 }
-
-final _random = math.Random.secure();
-const _alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
-
-/// 16 random characters: 95 bits, enough for ids nobody coordinates.
-String randomId() => String.fromCharCodes([
-  for (var i = 0; i < 16; i++) _alphabet.codeUnitAt(_random.nextInt(_alphabet.length)),
-]);

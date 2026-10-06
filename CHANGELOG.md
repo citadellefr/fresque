@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.0
+
+- Built on [trame](https://github.com/citadellefr/trame): the Go package is
+  now the format of a board (`fresque.Format`), served by trame's hub; the
+  Flutter client wraps trame's `DocSession`. **The protocol changes**: a
+  client of 0.6 does not speak to a server of 0.7, or the other way round.
+  The file does not change.
+- Edits merge by attribute: two people changing different things of the same
+  element both keep their change, instead of the last write replacing the
+  whole element. Undo leaves alone what others changed since.
+- `Hub`, `Peer`, `Store`, `Conn`, `ErrGone` and the close codes are trame's,
+  under their old names. `Options` embeds trame's.
+- Dart: `Board` follows the document of the session and can no longer be built
+  alone; `Operation` and the pending layer are gone. `BoardSession.apply` and
+  the rest of its API are as they were.
+
 ## 0.6.0
 
 - Shape correction keeps to simple shapes: a line, an ellipse or a circle, a

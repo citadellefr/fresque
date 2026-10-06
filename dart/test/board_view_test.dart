@@ -21,7 +21,11 @@ void main() {
   late BoardSession session;
   late BoardController controller;
 
-  Future<void> mount(WidgetTester tester, {Map<String, Object?>? greeting}) async {
+  Future<void> mount(
+    WidgetTester tester, {
+    Map<String, Object?>? greeting,
+    Iterable<BoardElement> elements = const [],
+  }) async {
     server = FakeServer();
     session = BoardSession(server.connect)..start();
     controller = BoardController(session);
@@ -37,6 +41,8 @@ void main() {
     await tester.pump();
     server.last.receive(greeting ?? hello());
     await tester.pump();
+    server.last.receive(doc(elements));
+    await tester.pump();
   }
 
   boardTest('a pen stroke becomes one element', (tester) async {
@@ -46,7 +52,7 @@ void main() {
 
     final ops = server.last.sentOfType('op');
     expect(ops, hasLength(1));
-    final element = BoardElement.fromJson((ops.single['put']! as List).single)!;
+    final element = sentElement((ops.single['d']! as List).single as Map<String, Object?>);
     expect(element.kind, ElementKind.stroke);
     expect(element.points.length, greaterThanOrEqualTo(4));
     expect(session.board.elements.single.id, element.id);
@@ -241,7 +247,9 @@ void main() {
       session.dispose();
     });
     await tester.pump();
-    server.last.receive(hello(elements: [rect('a', x: 1000, y: 1000).toJson()]));
+    server.last.receive(hello());
+    await tester.pump();
+    server.last.receive(doc([rect('a', x: 1000, y: 1000)]));
     await tester.pump();
     expect(session.status, BoardStatus.online);
 
@@ -295,9 +303,7 @@ void main() {
     expect(image.bounds.center, controller.visibleRect(viewport).center);
     expect(controller.selection, {image.id});
     expect(controller.tool, BoardTool.select);
-    final sent = BoardElement.fromJson(
-      (server.last.sentOfType('op').single['put']! as List).single,
-    )!;
+    final sent = sentElement((server.last.sentOfType('op').single['d']! as List).single as Map<String, Object?>);
     expect(sent.src, image.src);
   });
 
@@ -314,11 +320,7 @@ void main() {
     bool onScreen(Rect area) => (Offset.zero & size).contains(controller.toScreen(area.center));
 
     final far = rect('far', x: 5000, y: -3000);
-    server.last.receive({
-      't': 'op',
-      'sid': 2,
-      'put': [far.toJson()],
-    });
+    server.last.receive(op([created(far)], version: 1));
     await tester.pump();
     expect(onScreen(far.bounds), isFalse);
     controller.follow('7');
@@ -351,11 +353,7 @@ void main() {
     await tester.pump();
     expect(controller.following, isNull);
     final offset = controller.offset;
-    server.last.receive({
-      't': 'op',
-      'sid': 2,
-      'put': [rect('elsewhere', x: -9000, y: 9000).toJson()],
-    });
+    server.last.receive(op([created(rect('elsewhere', x: -9000, y: 9000))], version: 2));
     await tester.pump();
     expect(controller.offset, offset);
   });

@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:fresque/fresque.dart';
+import 'package:trame/trame.dart';
 
 class FakeTransport implements BoardTransport {
   final _incoming = StreamController<String>();
@@ -56,22 +57,76 @@ class FakeServer {
 
 Map<String, Object?> hello({
   int sid = 1,
-  int ack = 0,
-  int version = 0,
   int saved = 0,
   bool readOnly = false,
-  List<Map<String, Object?>> elements = const [],
+  String epoch = 'e0',
   List<Map<String, Object?>> peers = const [],
 }) => {
   't': 'hello',
   'sid': sid,
-  'ack': ack,
-  'v': version,
+  'id': 'me',
+  'name': 'Me',
+  'epoch': epoch,
+  'v': 0,
   'saved': saved,
   'ro': readOnly,
   'peers': peers,
-  'elements': elements,
 };
+
+/// The change that creates an element, as the hub writes it.
+Map<String, Object?> created(BoardElement e) => {
+  'o': 'new',
+  'id': e.id,
+  't': elementType,
+  'k': zKey(e.z),
+  'a': e.attributes,
+};
+
+/// The element a client's edit creates.
+BoardElement sentElement(Map<String, Object?> change) =>
+    BoardElement.fromJson({...(change['a']! as Map<String, Object?>), 'id': change['id'], 'z': zOf('${change['k']}')})!;
+
+/// What the hub answers to a client that asks for the board: all of it.
+Map<String, Object?> doc(Iterable<BoardElement> elements, {int version = 0, int ack = 0}) => {
+  't': 'doc',
+  'v': version,
+  'ack': ack,
+  'd': [for (final e in elements) created(e)],
+};
+
+/// An edit of somebody else, as the hub relays it.
+Map<String, Object?> op(List<Map<String, Object?>> changes, {int sid = 2, required int version}) => {
+  't': 'op',
+  'sid': sid,
+  'v': version,
+  'd': changes,
+};
+
+/// A board over a document of its own, for the tests of how it is drawn
+/// rather than of how it travels.
+class TestBoard extends Board {
+  TestBoard._(this._tree) : super(() => _tree);
+
+  factory TestBoard([Iterable<BoardElement> elements = const []]) =>
+      TestBoard._(Tree())..edit([...elements], const []);
+
+  final Tree _tree;
+
+  /// Puts elements, giving an element of the same id its new look, and deletes.
+  void edit(List<BoardElement> put, List<String> delete) {
+    final changes = <Change>[
+      for (final e in put) ...[
+        if (_tree[e.id] != null) Change.delete(e.id),
+        Change.create(Node(id: e.id, type: elementType, key: zKey(e.z), attributes: e.attributes)),
+      ],
+      for (final id in delete)
+        if (_tree[id] != null) Change.delete(id),
+    ];
+    final edit = Edit(changes);
+    _tree.apply(edit);
+    follow(edit);
+  }
+}
 
 BoardElement rect(String id, {int z = 1, double x = 0, double y = 0}) => BoardElement(
   id: id,

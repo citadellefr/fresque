@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.0
+
+- Built on trame's `DocSession`: see the changelog of the package. The
+  protocol changes, so the client and the server must be updated together.
+  `Board` follows the document of its session; `Operation` is gone.
+
 ## 0.6.0
 
 - Shape correction keeps to simple shapes: a line, an ellipse or a circle, a
