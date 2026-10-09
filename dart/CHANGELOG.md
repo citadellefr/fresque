@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.0
+
+- Resizing several elements: the corners of a selection of more than one
+  element scale them together, in proportion, away from the opposite corner.
+  Stroke widths stay as they are.
+- A text resizes by its corners too, its letters growing with it:
+  `BoardElement.fitted` scales `fontSize`, and `canResize` only refuses a
+  dot.
+- Pasting a picture: in a browser, Ctrl+V puts the picture the clipboard
+  holds on the board, under the mouse, selected. Copying or cutting elements
+  takes that picture off the clipboard, so that the next paste is theirs.
+  `BoardView.onImageError` is told when the picture cannot be read, and
+  `BoardController.insertImage` takes where to put it, `at`. Outside a
+  browser nothing reads a picture from the clipboard yet.
+
 ## 0.7.0
 
 - Built on trame's `DocSession`: see the changelog of the package. The

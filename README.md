@@ -155,7 +155,7 @@ short-lived ticket each time.
 | --- | --- |
 | One finger, mouse, stylus | use the current tool |
 | Ctrl + pen or highlighter | draw a clean shape |
-| Corner of a selected shape, stroke or image | resize (Shift keeps a shape's proportions) |
+| Corner of the selection | resize: several elements together, in proportion (Shift keeps a shape's proportions) |
 | Two fingers, trackpad | pan and zoom |
 | Wheel | pan (zoom with Ctrl or ⌘) |
 | `Ctrl` + `+` / `-` / `0` | zoom in, zoom out, 100 % |
@@ -164,7 +164,7 @@ short-lived ticket each time.
 | `V` `H` `P` `M` `L` `A` `R` `O` `T` `E` | select, hand, pen, highlighter, line, arrow, rectangle, ellipse, text, eraser |
 | `Ctrl+Z` / `Ctrl+Shift+Z` or `Ctrl+Y` | undo / redo |
 | `Delete`, `Ctrl+A`, `Esc` | delete selection, select all, deselect |
-| `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | copy, cut, paste under the mouse |
+| `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | copy, cut, paste under the mouse; in a browser, `Ctrl+V` also pastes the picture on the clipboard |
 
 ## Protocol
 

@@ -168,6 +168,48 @@ void main() {
     expect(stretched.points[0], closeTo(100, 1));
   });
 
+  boardTest('dragging a corner of several selected elements scales them together', (tester) async {
+    await mount(tester);
+    final line = BoardElement(
+      id: 'l',
+      kind: ElementKind.line,
+      z: 2,
+      x: 200,
+      y: 150,
+      points: Float32List.fromList([0, 0, 100, 0]),
+      color: 0xFF000000,
+    );
+    final text = BoardElement(
+      id: 't',
+      kind: ElementKind.text,
+      z: 3,
+      x: 250,
+      y: 100,
+      width: 50,
+      height: 25,
+      color: 0xFF000000,
+      text: 'a',
+    );
+    session.apply(put: [rect('r', x: 100, y: 100), line, text]);
+    controller
+      ..tool = BoardTool.select
+      ..select(['r', 'l', 't']);
+    await tester.pump();
+
+    // the three span 100,100 – 300,150
+    final corner = controller.toScreen(const Offset(300, 150)) + const Offset(4, 4);
+    await tester.dragFrom(corner, Offset(200 * controller.scale, 0));
+    await tester.pump();
+
+    final r = session.board['r']!, l = session.board['l']!, t = session.board['t']!;
+    expect(r.box, const Rect.fromLTWH(100, 100, 20, 20));
+    expect(l.box, const Rect.fromLTWH(300, 200, 200, 0));
+    expect(l.strokeWidth, line.strokeWidth);
+    expect(t.box, const Rect.fromLTWH(400, 100, 100, 50));
+    expect(t.fontSize, 40);
+    expect(controller.selection, {'r', 'l', 't'});
+  });
+
   boardTest('Ctrl with C and V pastes a copy under the mouse, selected', (tester) async {
     await mount(tester);
     session.apply(put: [rect('a', z: 3)]);
@@ -305,6 +347,15 @@ void main() {
     expect(controller.tool, BoardTool.select);
     final sent = sentElement((server.last.sentOfType('op').single['d']! as List).single as Map<String, Object?>);
     expect(sent.src, image.src);
+  });
+
+  boardTest('an image can be put somewhere else than the middle', (tester) async {
+    await mount(tester);
+    await tester.runAsync(() async {
+      await controller.insertImage(await noisePng(40, 20), const Size(800, 600), at: const Offset(-500, 70));
+    });
+    await tester.pump();
+    expect(session.board.elements.single.bounds.center, const Offset(-500, 70));
   });
 
   boardTest('following keeps the edits of a peer on screen until the view is panned', (tester) async {

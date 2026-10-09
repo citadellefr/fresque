@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'board.dart';
+import 'clipboard.dart';
 import 'controller.dart';
 import 'element.dart';
 import 'geometry.dart';
@@ -21,11 +22,18 @@ import 'shapes.dart';
 /// pan and zoom, the wheel pans (zooms with Ctrl), the middle button or Space
 /// pans, Ctrl with `+`, `-` or `0` zooms. Once a stylus has been seen, fingers
 /// only pan, and its eraser end erases. Drawing with Ctrl held turns the
-/// stroke into the simple shape it stands for, and the corners of a selected
-/// shape, path or image resize it. Ctrl with `C`, `X` and `V` copies, cuts
-/// and pastes the selection.
+/// stroke into the simple shape it stands for, and the corners of the
+/// selection resize it, as a whole when it is several elements. Ctrl with
+/// `C`, `X` and `V` copies, cuts and pastes the selection; in a browser,
+/// `V` also pastes the picture the clipboard holds.
 class BoardView extends StatefulWidget {
-  const BoardView({required this.controller, this.accentColor, this.gridColor, super.key});
+  const BoardView({
+    required this.controller,
+    this.accentColor,
+    this.gridColor,
+    this.onImageError,
+    super.key,
+  });
 
   final BoardController controller;
 
@@ -34,6 +42,9 @@ class BoardView extends StatefulWidget {
 
   /// Dots every 24 units; the theme's outline colour if null.
   final Color? gridColor;
+
+  /// Told why a pasted picture could not be put on the board.
+  final void Function(FormatException error)? onImageError;
 
   @override
   State<BoardView> createState() => _BoardViewState();
@@ -46,12 +57,12 @@ class _Interaction extends ChangeNotifier {
   Set<String> erasing = const {};
   Rect? marquee;
   String? editing;
-  BoardElement? resized;
+  List<BoardElement> resized = const [];
 
   final hidden = ValueNotifier<Set<String>>(const {});
 
   void changed() {
-    final next = {...lifted, ...erasing, ?editing, ?resized?.id};
+    final next = {...lifted, ...erasing, ?editing, for (final e in resized) e.id};
     if (!_sameSet(next, hidden.value)) hidden.value = next;
     notifyListeners();
   }
@@ -70,16 +81,21 @@ bool get _commandPressed {
   return keyboard.isControlPressed || keyboard.isMetaPressed;
 }
 
-/// The selection when its corners can be dragged: a single element but a
-/// text.
-BoardElement? _resizable(BoardController controller) {
-  if (controller.session.readOnly || controller.selection.length != 1) return null;
-  final e = controller.selected.firstOrNull;
-  return e != null && e.canResize ? e : null;
+/// The selection when its corners can be dragged: nothing on a board that is
+/// only read, and nothing when all it spans is a dot.
+List<BoardElement> _resizable(BoardController controller) {
+  if (controller.session.readOnly) return const [];
+  final selected = controller.selected;
+  return selected.isEmpty || _span(selected).longestSide == 0 ? const [] : selected;
 }
 
-/// The frame drawn around a selected element.
-Rect _frame(BoardElement e, double scale) => e.bounds.inflate(4 / scale);
+/// What the boxes of [elements] span together.
+Rect _span(Iterable<BoardElement> elements) =>
+    elements.map((e) => e.box).reduce((a, b) => a.expandToInclude(b));
+
+/// The frame drawn around selected elements.
+Rect _frame(Iterable<BoardElement> elements, double scale) =>
+    elements.map((e) => e.bounds).reduce((a, b) => a.expandToInclude(b)).inflate(4 / scale);
 
 /// Top left, top right, bottom right, bottom left.
 List<Offset> _corners(Rect r) => [r.topLeft, r.topRight, r.bottomRight, r.bottomLeft];
@@ -116,6 +132,7 @@ class _BoardViewState extends State<BoardView> {
   var _size = Size.zero;
   _TextEditing? _editing;
   StreamSubscription<BoardPeer>? _edits;
+  void Function()? _unwatchClipboard;
   String? _followed;
   String? _lastTapId;
   DateTime _lastTapAt = DateTime(0);
@@ -138,6 +155,7 @@ class _BoardViewState extends State<BoardView> {
     board.addListener(_boardChanged);
     controller.addListener(_followChanged);
     _edits = session.edits.listen(_edited);
+    _unwatchClipboard = watchClipboard(onCopy: _copied, onPaste: _pasted);
   }
 
   @override
@@ -164,6 +182,7 @@ class _BoardViewState extends State<BoardView> {
     board.removeListener(_boardChanged);
     controller.removeListener(_followChanged);
     unawaited(_edits?.cancel());
+    _unwatchClipboard?.call();
     _editing?.dispose();
     _scene.dispose();
     _interaction.dispose();
@@ -295,7 +314,7 @@ class _BoardViewState extends State<BoardView> {
 
   MouseCursor _cursor() {
     if (_space) return SystemMouseCursors.grab;
-    if (controller.tool == BoardTool.select && _resizable(controller) != null) {
+    if (controller.tool == BoardTool.select && _resizable(controller).isNotEmpty) {
       switch (_hoveredCorner.value) {
         case 0 || 2:
           return SystemMouseCursors.resizeUpLeftDownRight;
@@ -430,7 +449,7 @@ class _BoardViewState extends State<BoardView> {
 
   _Gesture _select(Offset world, PointerDeviceKind kind) {
     final corner = _cornerAt(world, kind);
-    if (corner != null) return _Resize(this, _resizable(controller)!, corner, world);
+    if (corner != null) return _Resize(this, _resizable(controller), corner, world);
     final hit = hitTop(board.elements, world, tolerance);
     final additive = HardwareKeyboard.instance.isShiftPressed;
     if (hit == null) {
@@ -457,10 +476,10 @@ class _BoardViewState extends State<BoardView> {
 
   /// The corner of the resizable selection under [world], if any.
   int? _cornerAt(Offset world, PointerDeviceKind kind) {
-    final e = _resizable(controller);
-    if (e == null) return null;
+    final elements = _resizable(controller);
+    if (elements.isEmpty) return null;
     final reach = (kind == PointerDeviceKind.touch ? 16 : 8) / controller.scale;
-    final corners = _corners(_frame(e, controller.scale));
+    final corners = _corners(_frame(elements, controller.scale));
     for (var i = 0; i < corners.length; i++) {
       if ((corners[i] - world).distance <= reach) return i;
     }
@@ -581,6 +600,8 @@ class _BoardViewState extends State<BoardView> {
     if (event is KeyUpEvent) return KeyEventResult.ignored;
     final keyboard = HardwareKeyboard.instance;
     if (_commandPressed) {
+      // left to the browser, which then tells the page to copy, cut or paste
+      if (_unwatchClipboard != null && _clipboardKeys.contains(key)) return KeyEventResult.ignored;
       if (key == LogicalKeyboardKey.keyZ) {
         keyboard.isShiftPressed ? session.redo() : session.undo();
       } else if (key == LogicalKeyboardKey.keyY) {
@@ -592,7 +613,7 @@ class _BoardViewState extends State<BoardView> {
       } else if (key == LogicalKeyboardKey.keyX && !session.readOnly) {
         controller.cutSelection();
       } else if (key == LogicalKeyboardKey.keyV) {
-        controller.paste(controller.toWorld(_pointer ?? _size.center(Offset.zero)));
+        controller.paste(_pasteTarget);
       } else if (_zoomIn.contains(key)) {
         controller.zoomBy(1.25, _size);
       } else if (_zoomOut.contains(key)) {
@@ -620,6 +641,38 @@ class _BoardViewState extends State<BoardView> {
     controller.tool = tool;
     return KeyEventResult.handled;
   }
+
+  Offset get _pasteTarget => controller.toWorld(_pointer ?? _size.center(Offset.zero));
+
+  bool _copied({required bool cut}) {
+    if (!_focus.hasPrimaryFocus || controller.selection.isEmpty) return false;
+    if (cut && session.readOnly) return false;
+    cut ? controller.cutSelection() : controller.copySelection();
+    return true;
+  }
+
+  void _pasted(Future<Uint8List>? image) {
+    if (!_focus.hasPrimaryFocus || session.readOnly) return;
+    if (image == null) {
+      controller.paste(_pasteTarget);
+    } else {
+      unawaited(_pasteImage(image, _pasteTarget));
+    }
+  }
+
+  Future<void> _pasteImage(Future<Uint8List> image, Offset at) async {
+    try {
+      await controller.insertImage(await image, _size, at: at);
+    } on FormatException catch (error) {
+      widget.onImageError?.call(error);
+    }
+  }
+
+  static final _clipboardKeys = {
+    LogicalKeyboardKey.keyC,
+    LogicalKeyboardKey.keyX,
+    LogicalKeyboardKey.keyV,
+  };
 
   static final _commandKeys = {
     LogicalKeyboardKey.controlLeft,
@@ -926,58 +979,72 @@ class _Move implements _Gesture {
   }
 }
 
-/// Drags one [corner] of [element], the opposite one staying where it is. An
-/// image or a freehand stroke keeps its proportions, and so does a shape with
-/// Shift held.
+/// Drags one [corner] of what [elements] span, the opposite one staying
+/// where it is. An image, a freehand stroke, a text or several elements keep
+/// their proportions, and so does a shape with Shift held.
 class _Resize implements _Gesture {
-  _Resize(this.view, this.element, int corner, this.start)
-    : _corner = _corners(element.box)[corner],
-      _anchor = _corners(element.box)[(corner + 2) % 4];
+  _Resize(this.view, this.elements, int corner, this.start) : _box = _span(elements) {
+    _corner = _corners(_box)[corner];
+    _anchor = _corners(_box)[(corner + 2) % 4];
+  }
+
+  static const _proportional = {ElementKind.image, ElementKind.stroke, ElementKind.text};
 
   final _BoardViewState view;
-  final BoardElement element;
+  final List<BoardElement> elements;
   final Offset start;
-  final Offset _corner;
-  final Offset _anchor;
-  BoardElement? _resized;
+  final Rect _box;
+  late final Offset _corner;
+  late final Offset _anchor;
+  var _resized = const <BoardElement>[];
 
   @override
   void move(Offset world, PointerMoveEvent event) {
-    final box = element.box;
     final span = _corner + (world - start) - _anchor;
     final least = 8 / view.controller.scale;
-    var width = box.width == 0 ? 0.0 : math.max(span.dx.abs(), least);
-    var height = box.height == 0 ? 0.0 : math.max(span.dy.abs(), least);
+    var width = _box.width == 0 ? 0.0 : math.max(span.dx.abs(), least);
+    var height = _box.height == 0 ? 0.0 : math.max(span.dy.abs(), least);
     final proportional =
-        element.kind == ElementKind.image ||
-        element.kind == ElementKind.stroke ||
+        elements.length > 1 ||
+        _proportional.contains(elements.single.kind) ||
         HardwareKeyboard.instance.isShiftPressed;
-    if (proportional && box.width > 0 && box.height > 0) {
-      final k = math.max(width / box.width, height / box.height);
-      width = box.width * k;
-      height = box.height * k;
+    if (proportional && _box.width > 0 && _box.height > 0) {
+      final k = math.max(width / _box.width, height / _box.height);
+      width = _box.width * k;
+      height = _box.height * k;
     }
-    final rect = Rect.fromPoints(
+    final to = Rect.fromPoints(
       _anchor,
       _anchor + Offset(span.dx < 0 ? -width : width, span.dy < 0 ? -height : height),
     );
-    final resized = _resized = element.fitted(rect);
+    final kx = _box.width == 0 ? 1.0 : to.width / _box.width;
+    final ky = _box.height == 0 ? 1.0 : to.height / _box.height;
+    _resized = [
+      for (final e in elements)
+        e.fitted(
+          Rect.fromLTWH(
+            to.left + (e.box.left - _box.left) * kx,
+            to.top + (e.box.top - _box.top) * ky,
+            e.box.width * kx,
+            e.box.height * ky,
+          ),
+        ),
+    ];
     view._interaction
-      ..resized = resized
+      ..resized = _resized
       ..changed();
   }
 
   @override
   void end() {
-    final resized = _resized;
-    if (resized != null) view.session.apply(put: [resized]);
+    view.session.apply(put: _resized);
     cancel();
   }
 
   @override
   void cancel() {
     view._interaction
-      ..resized = null
+      ..resized = const []
       ..changed();
   }
 }
@@ -1118,8 +1185,9 @@ class _OverlayPainter extends CustomPainter {
       final e = board[id];
       if (e != null) paintElement(canvas, e.translated(interaction.shift), images: scene.images);
     }
-    final resized = interaction.resized;
-    if (resized != null) paintElement(canvas, resized, images: scene.images);
+    for (final e in interaction.resized) {
+      paintElement(canvas, e, images: scene.images);
+    }
     for (final peer in session.peers) {
       final draft = peer.draft;
       if (draft != null) paintElement(canvas, draft);
@@ -1132,14 +1200,16 @@ class _OverlayPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5 / scale;
     final shift = interaction.lifted.isEmpty ? Offset.zero : interaction.shift;
-    for (final e in controller.selected) {
-      canvas.drawRect(_frame(e.id == resized?.id ? resized! : e, scale).shift(shift), line);
+    final resized = {for (final e in interaction.resized) e.id: e};
+    final selected = [for (final e in controller.selected) resized[e.id] ?? e];
+    for (final e in selected) {
+      canvas.drawRect(_frame([e], scale).shift(shift), line);
     }
-    final resizable = _resizable(controller);
-    if (resizable != null) {
-      final frame = _frame(resizable.id == resized?.id ? resized! : resizable, scale);
+    if (_resizable(controller).isNotEmpty) {
+      final frame = _frame(selected, scale).shift(shift);
+      if (selected.length > 1) canvas.drawRect(frame, line);
       final fill = Paint()..color = const Color(0xFFFFFFFF);
-      for (final corner in _corners(frame.shift(shift))) {
+      for (final corner in _corners(frame)) {
         final handle = Rect.fromCenter(center: corner, width: 8 / scale, height: 8 / scale);
         canvas
           ..drawRect(handle, fill)

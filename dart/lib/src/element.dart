@@ -112,9 +112,8 @@ class BoardElement {
       kind == ElementKind.arrow ||
       kind == ElementKind.polygon;
 
-  /// Whether it can be stretched by its corners: anything but a text or a
-  /// dot.
-  bool get canResize => kind != ElementKind.text && box.longestSide > 0;
+  /// Whether it can be stretched by its corners: anything but a dot.
+  bool get canResize => box.longestSide > 0;
 
   bool get canFill =>
       kind == ElementKind.rectangle || kind == ElementKind.ellipse || kind == ElementKind.polygon;
@@ -154,9 +153,17 @@ class BoardElement {
   BoardElement translated(Offset delta) => copyWith(x: x + delta.dx, y: y + delta.dy);
 
   /// Stretched so that its [box] becomes [to]. A side of no length, that of a
-  /// level line, keeps none.
+  /// level line, keeps none, and the letters of a text grow with its height.
   BoardElement fitted(Rect to) {
-    if (!isPath) return copyWith(x: to.left, y: to.top, width: to.width, height: to.height);
+    if (!isPath) {
+      return copyWith(
+        x: to.left,
+        y: to.top,
+        width: to.width,
+        height: to.height,
+        fontSize: kind == ElementKind.text && height > 0 ? fontSize * to.height / height : null,
+      );
+    }
     final from = box;
     final kx = from.width == 0 ? 0.0 : to.width / from.width;
     final ky = from.height == 0 ? 0.0 : to.height / from.height;

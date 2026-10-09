@@ -106,11 +106,13 @@ class BoardController extends ChangeNotifier {
     select(session.board.elements.map((e) => e.id));
   }
 
-  /// Puts the image file [bytes] on the board, in the middle of [viewport],
-  /// and selects it. Throws a [FormatException] when they are not an image.
-  Future<void> insertImage(Uint8List bytes, Size viewport) async {
+  /// Puts the image file [bytes] on the board, centred on [at] or else in the
+  /// middle of [viewport], and selects it. Throws a [FormatException] when
+  /// they are not an image.
+  Future<void> insertImage(Uint8List bytes, Size viewport, {Offset? at}) async {
     final image = await prepareImage(bytes);
     final visible = visibleRect(viewport);
+    final center = at ?? visible.center;
     final fit = math.min(
       1.0,
       0.6 * math.min(visible.width / image.size.width, visible.height / image.size.height),
@@ -120,8 +122,8 @@ class BoardController extends ChangeNotifier {
       id: randomId(),
       kind: ElementKind.image,
       z: session.board.topZ + 1,
-      x: visible.center.dx - size.width / 2,
-      y: visible.center.dy - size.height / 2,
+      x: center.dx - size.width / 2,
+      y: center.dy - size.height / 2,
       width: size.width,
       height: size.height,
       color: 0xFF000000,
