@@ -2,3 +2,4 @@
 /dart/build/
 /dart/pubspec.lock
 /dart/.flutter-plugins*
+/dart/pubspec_overrides.yaml
