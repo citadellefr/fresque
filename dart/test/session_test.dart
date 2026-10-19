@@ -194,7 +194,8 @@ void main() {
       async.elapse(const Duration(milliseconds: 50));
       unawaited(server.last.drop());
       async.flushMicrotasks();
-      async.elapse(const Duration(seconds: 1));
+      // the retry comes after 0.5 to 1.5 times its first step
+      async.elapse(const Duration(milliseconds: 1500));
       server.last.receive(hello());
       async.flushMicrotasks();
       server.last.receive(doc(const [], ack: 0));
@@ -223,7 +224,7 @@ void main() {
       expect(session.status, BoardStatus.offline);
 
       session.apply(put: [rect('c')]);
-      async.elapse(const Duration(seconds: 1));
+      async.elapse(const Duration(milliseconds: 1500));
       expect(server.transports, hasLength(2));
       server.last.receive(hello());
       async.flushMicrotasks();

@@ -225,6 +225,10 @@ go test -race ./...
 cd dart && flutter analyze && flutter test
 ```
 
+To try the client against a local checkout of trame, add an untracked
+`dart/pubspec_overrides.yaml` (ignored by git) with a `dependency_overrides`
+entry for `trame`; the tests of the repository and its CI never rely on it.
+
 Issues and pull requests are welcome.
 
 ## License
