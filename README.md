@@ -13,6 +13,8 @@ Fresque comes in two parts that work together:
 It is developed by [Citadelle](https://github.com/citadellefr), where it powers
 the whiteboards of the Documents app, and is released under the MIT license.
 
+Where things are and how to test fast: [docs/carte.md](docs/carte.md).
+
 ## Features
 
 - **Drawing tools**: pen, highlighter, line, arrow, rectangle, ellipse, text,
