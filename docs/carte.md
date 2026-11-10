@@ -32,6 +32,7 @@ Dart (via nix-shell, `flutter test`, pas `dart test`) :
 - analyse : `cd dart && TMPDIR=/data/tmp nix-shell ../../app/shell.nix --run 'flutter analyze'` (23 s, `No issues found!`)
 - un fichier : `cd dart && TMPDIR=/data/tmp nix-shell ../../app/shell.nix --run 'flutter test test/geometry_test.dart'`
   mesuré : 35 s au total (nix-shell compris, 1 s de test), `+4: All tests passed!`
+- voie rapide (4 à 5 s au lieu de 22 s pour un fichier, mêmes sorties) : `TMPDIR=/data/tmp nix-shell ../../app/shell.nix --run 'export -p' > /data/tmp/app-env.sh` une fois, puis `cd dart && bash -c '. /data/tmp/app-env.sh; export TMPDIR=/data/tmp; flutter test -r failures-only test/<fichier>.dart'` ; détail dans app/docs/carte.md, « Construire et tester vite »
 Contre un trame local : `dart/pubspec_overrides.yaml` non suivi (`dependency_overrides`).
 
 ## Publier
